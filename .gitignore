@@ -1,0 +1,16 @@
+# Local environments
+llmgazepp/
+.venv/
+venv/
+
+# Data and artifacts
+data/
+vlm_trace.json
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Tooling
+.claude/
+.DS_Store

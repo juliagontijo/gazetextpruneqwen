@@ -1,4 +1,4 @@
-# Sara
+# Gaze-Text Prune on Qwen2-VL
 
 Forked Qwen2-VL profiling workspace for gaze/text pruning experiments on EgoGazeVQA.
 

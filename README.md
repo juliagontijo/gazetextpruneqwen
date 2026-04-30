@@ -5,5 +5,5 @@ Qwen-based profiling and gaze-guided pruning experiments for VLM decoding effici
 ## Run
 
 ```bash
-python profile_model.py --no-trace --frames 8 --save-vis --gaze-prune
+python profile_model.py --no-trace --frames 4 --save-vis --text-prune --save-text-raters
 ```

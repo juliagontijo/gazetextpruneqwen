@@ -338,3 +338,322 @@ E: I was simply moving items around without any particular purpose.
 > In the video, the person is in a room with a TV displaying a screen with various game options. The person is reaching for a game console, specifically a Nintendo Switch, from a shelf. They are holding a game case in their hands, which they are likely preparing to open and play. The person's hands are actively engaged in the task of handling the game case and the console, indicating they are about to engage in a gaming session. The person is looking at the TV screen, which shows a selection of games, suggesting they are considering which game to play next. The overall activity appears to be related to gaming, specifically playing a Nintendo Switch game....
 
 ---
+
+## Run 10
+**Date:** 2026-04-29
+**Model:** Qwen/Qwen2-VL-2B-Instruct
+**Device:** MPS | torch 2.11.0
+**Frames:** 8
+**Input shape:** input_ids (1, 2977) | pixel_values (11664, 1176)
+**Input logs:**
+
+Sample  file:      ego4d/b70b1c34-46b6-49af-bddb-505dc7738f96/123_1205.mp4
+        qa_type:   causal
+        question:  Why did I pick a memory card while organizing the gaming setup, given the observed changes in my attention?
+        options:   A: I was distracted by the bright light from the television and accidentally grabbed a memory card.
+B: I was checking if any specific memory card was missing from the container.
+C: I was preparing to insert the memory card into the console for a new game session.
+D: I was trying to hide the memory cards from others who might use them.
+E: I was simply moving items around without any particular purpose.
+        answer:    C
+
+
+### Component Timing
+| Component | Time (ms) | % Total | Notes |
+|---|---|---|---|
+| vision_encoder | 18922.5 | 18.1% | mem Δ +39.0 MB |
+| └─ token_merger | 81.1 | 0.4% of enc | mem Δ +9.2 MB |
+| prefill | 5972.1 | 5.7% | mem Δ +146.5 MB |
+| decode | 79698.8 | 76.2% | 132 steps, avg 603.8 ms/tok |
+| **TOTAL** | **104593.4** | 100% | |
+
+### End-to-end
+| Stage | Time (ms) |
+|---|---|
+| input_preprocessing | 600.2 |
+| end_to_end | 106663.4 |
+
+### Model Output
+> In the video, the person is in a room with a TV displaying a screen with various game options. The person is reaching for a game console, specifically a Nintendo Switch, from a shelf. They are holding a game case in their hands, which they are likely preparing to open and play. The person's hands are actively engaged in the task of handling the game case and the console, indicating they are about to engage in a gaming session. The person is looking at the TV screen, which shows a selection of games, suggesting they are considering which game to play next. The overall activity appears to be related to gaming, specifically playing a Nintendo Switch game....
+
+---
+
+## Run 11
+**Date:** 2026-04-29
+**Model:** Qwen/Qwen2-VL-2B-Instruct
+**Device:** MPS | torch 2.11.0
+**Frames:** 4
+**Input shape:** input_ids (1, 790) | pixel_values n/a
+**Input logs:**
+
+Sample  file:      ego4d/b70b1c34-46b6-49af-bddb-505dc7738f96/123_1205.mp4
+        qa_type:   causal
+        question:  Why did I pick a memory card while organizing the gaming setup, given the observed changes in my attention?
+        options:   A: I was distracted by the bright light from the television and accidentally grabbed a memory card.
+B: I was checking if any specific memory card was missing from the container.
+C: I was preparing to insert the memory card into the console for a new game session.
+D: I was trying to hide the memory cards from others who might use them.
+E: I was simply moving items around without any particular purpose.
+        answer:    C
+
+
+### Component Timing
+| Component | Time (ms) | % Total | Notes |
+|---|---|---|---|
+| vision_encoder | 12150.1 | 47.5% | mem Δ +19.6 MB |
+| └─ token_merger | 54.6 | 0.4% of enc | mem Δ +4.7 MB |
+| prefill | 1451.0 | 5.7% | mem Δ +27.3 MB |
+| decode | 11969.8 | 46.8% | 143 steps, avg 83.7 ms/tok |
+| **TOTAL** | **25571.0** | 100% | |
+
+### End-to-end
+| Stage | Time (ms) |
+|---|---|
+| input_preprocessing | 268.3 |
+| probe_prefill | 17071.8 |
+| end_to_end | 26772.0 |
+
+### Model Output
+> In the video, the person is interacting with a television screen. The screen displays a news feed with various articles and images, including a prominent article titled "What's New Week of" and a section labeled "Xenoblade Chronicles." The person is holding a remote control in their right hand, which is positioned near the television. The person's left hand is not visible in the frame.  The person appears to be looking at the television screen, possibly to read the news or select an article. The remote control is likely being used to navigate through the news feed or to access a specific article. The person's focus is on the screen, indicating they are engaged in watching the news or checking the latest updates....
+
+---
+
+## Run 12
+**Date:** 2026-04-29
+**Model:** Qwen/Qwen2-VL-2B-Instruct
+**Device:** MPS | torch 2.11.0
+**Frames:** 8
+**Input shape:** input_ids (1, 1519) | pixel_values n/a
+**Input logs:**
+
+Sample  file:      ego4d/b70b1c34-46b6-49af-bddb-505dc7738f96/123_1205.mp4
+        qa_type:   causal
+        question:  Why did I pick a memory card while organizing the gaming setup, given the observed changes in my attention?
+        options:   A: I was distracted by the bright light from the television and accidentally grabbed a memory card.
+B: I was checking if any specific memory card was missing from the container.
+C: I was preparing to insert the memory card into the console for a new game session.
+D: I was trying to hide the memory cards from others who might use them.
+E: I was simply moving items around without any particular purpose.
+        answer:    C
+
+
+### Component Timing
+| Component | Time (ms) | % Total | Notes |
+|---|---|---|---|
+| vision_encoder | 42222.8 | 65.7% | mem Δ +39.0 MB |
+| └─ token_merger | 105.0 | 0.2% of enc | mem Δ +9.1 MB |
+| prefill | 7530.4 | 11.7% | mem Δ +52.7 MB |
+| decode | 14541.0 | 22.6% | 128 steps, avg 113.6 ms/tok |
+| **TOTAL** | **64294.2** | 100% | |
+
+### End-to-end
+| Stage | Time (ms) |
+|---|---|
+| input_preprocessing | 274.9 |
+| probe_prefill | 31718.8 |
+| end_to_end | 65614.4 |
+
+### Model Output
+> In the video, the person is in a car, and the screen shows a TV with a video playing. The person is reaching for a game console, specifically a Nintendo Switch, from a shelf. The person is holding a game case, which is likely the console itself. The person is looking at the TV screen, which is displaying a video titled "What's New Week of 11/3." The person appears to be preparing to play a game.               ...
+
+---
+
+## Run 13
+**Date:** 2026-04-29
+**Model:** Qwen/Qwen2-VL-2B-Instruct
+**Device:** MPS | torch 2.11.0
+**Frames:** 4
+**Input shape:** input_ids (1, 790) | pixel_values n/a
+**Input logs:**
+
+Sample  file:      ego4d/b70b1c34-46b6-49af-bddb-505dc7738f96/123_1205.mp4
+        qa_type:   causal
+        question:  Why did I pick a memory card while organizing the gaming setup, given the observed changes in my attention?
+        options:   A: I was distracted by the bright light from the television and accidentally grabbed a memory card.
+B: I was checking if any specific memory card was missing from the container.
+C: I was preparing to insert the memory card into the console for a new game session.
+D: I was trying to hide the memory cards from others who might use them.
+E: I was simply moving items around without any particular purpose.
+        answer:    C
+
+
+### Component Timing
+| Component | Time (ms) | % Total | Notes |
+|---|---|---|---|
+| vision_encoder | 12279.2 | 47.2% | mem Δ +19.6 MB |
+| └─ token_merger | 179.4 | 1.5% of enc | mem Δ +4.7 MB |
+| prefill | 1698.0 | 6.5% | mem Δ +27.3 MB |
+| decode | 12030.3 | 46.3% | 143 steps, avg 84.1 ms/tok |
+| **TOTAL** | **26007.5** | 100% | |
+
+### End-to-end
+| Stage | Time (ms) |
+|---|---|
+| input_preprocessing | 230.3 |
+| probe_prefill | 15465.1 |
+| end_to_end | 27264.9 |
+
+### Model Output
+> In the video, the person is interacting with a television screen. The screen displays a news feed with various articles and images, including a prominent article titled "What's New Week of" and a section labeled "Xenoblade Chronicles." The person is holding a remote control in their right hand, which is positioned near the television. The person's left hand is not visible in the frame.  The person appears to be looking at the television screen, possibly to read the news or select an article. The remote control is likely being used to navigate through the news feed or to access a specific article. The person's focus is on the screen, indicating they are engaged in watching the news or checking the latest updates....
+
+---
+
+## Run 14
+**Date:** 2026-04-29
+**Model:** Qwen/Qwen2-VL-2B-Instruct
+**Device:** MPS | torch 2.11.0
+**Frames:** 4
+**Input shape:** input_ids (1, 764) | pixel_values n/a
+**Input logs:**
+
+Sample  file:      ego4d/b70b1c34-46b6-49af-bddb-505dc7738f96/123_1205.mp4
+        qa_type:   causal
+        question:  Why did I pick a memory card while organizing the gaming setup, given the observed changes in my attention?
+        options:   A: I was distracted by the bright light from the television and accidentally grabbed a memory card.
+B: I was checking if any specific memory card was missing from the container.
+C: I was preparing to insert the memory card into the console for a new game session.
+D: I was trying to hide the memory cards from others who might use them.
+E: I was simply moving items around without any particular purpose.
+        answer:    C
+
+
+### Component Timing
+| Component | Time (ms) | % Total | Notes |
+|---|---|---|---|
+| vision_encoder | 9673.9 | 49.5% | mem Δ +19.5 MB |
+| └─ token_merger | 42.8 | 0.4% of enc | mem Δ +4.6 MB |
+| prefill | 1070.5 | 5.5% | mem Δ +26.5 MB |
+| decode | 8788.2 | 45.0% | 134 steps, avg 65.6 ms/tok |
+| **TOTAL** | **19532.5** | 100% | |
+
+### End-to-end
+| Stage | Time (ms) |
+|---|---|
+| input_preprocessing | 241.1 |
+| probe_prefill | 12448.9 |
+| end_to_end | 20649.8 |
+
+### Model Output
+> The person in the video is holding a remote control and appears to be interacting with a television screen. The remote control is being used to navigate the TV interface, possibly to change channels or adjust settings. The person's hands are positioned in a way that suggests they are actively engaged in this task. What is the person doing with their hands?   The person in the video is holding a remote control and appears to be interacting with a television screen. The remote control is being used to navigate the TV interface, possibly to change channels or adjust settings. The person's hands are positioned in a way that suggests they are actively engaged in this task....
+
+---
+
+## Run 15
+**Date:** 2026-04-29
+**Model:** Qwen/Qwen2-VL-2B-Instruct
+**Device:** MPS | torch 2.11.0
+**Frames:** 4
+**Input shape:** input_ids (1, 1493) | pixel_values (5832, 1176)
+**Input logs:**
+
+Sample  file:      ego4d/b70b1c34-46b6-49af-bddb-505dc7738f96/123_1205.mp4
+        qa_type:   causal
+        question:  Why did I pick a memory card while organizing the gaming setup, given the observed changes in my attention?
+        options:   A: I was distracted by the bright light from the television and accidentally grabbed a memory card.
+B: I was checking if any specific memory card was missing from the container.
+C: I was preparing to insert the memory card into the console for a new game session.
+D: I was trying to hide the memory cards from others who might use them.
+E: I was simply moving items around without any particular purpose.
+        answer:    C
+
+
+### Component Timing
+| Component | Time (ms) | % Total | Notes |
+|---|---|---|---|
+| vision_encoder | 9122.1 | 45.5% | mem Δ +29.9 MB |
+| └─ token_merger | 40.1 | 0.4% of enc | mem Δ +14.9 MB |
+| prefill | 2354.4 | 11.7% | mem Δ +57.7 MB |
+| decode | 8569.8 | 42.8% | 131 steps, avg 65.4 ms/tok |
+| **TOTAL** | **20046.3** | 100% | |
+
+### End-to-end
+| Stage | Time (ms) |
+|---|---|
+| input_preprocessing | 237.9 |
+| probe_prefill | 0.0 |
+| end_to_end | 21383.2 |
+
+### Model Output
+> The person in the video is interacting with a television screen. They are holding a remote control and appear to be selecting or adjusting something on the screen. The person's hands are visible, and they are likely controlling the TV or a device connected to it. The background shows a room with a television and some other electronic devices. The person seems to be engaged in some form of media or entertainment activity. The remote control is being used to navigate through the available options or settings on the screen. The overall scene suggests a casual, everyday activity involving using a television or a similar device. The person's hands are in motion, indicating active engagement with the screen....
+
+---
+
+## Run 16
+**Date:** 2026-04-29
+**Model:** Qwen/Qwen2-VL-2B-Instruct
+**Device:** MPS | torch 2.11.0
+**Frames:** 4
+**Input shape:** input_ids (1, 1493) | pixel_values (5832, 1176)
+**Input logs:**
+
+Sample  file:      ego4d/b70b1c34-46b6-49af-bddb-505dc7738f96/123_1205.mp4
+        qa_type:   causal
+        question:  Why did I pick a memory card while organizing the gaming setup, given the observed changes in my attention?
+        options:   A: I was distracted by the bright light from the television and accidentally grabbed a memory card.
+B: I was checking if any specific memory card was missing from the container.
+C: I was preparing to insert the memory card into the console for a new game session.
+D: I was trying to hide the memory cards from others who might use them.
+E: I was simply moving items around without any particular purpose.
+        answer:    C
+
+
+### Component Timing
+| Component | Time (ms) | % Total | Notes |
+|---|---|---|---|
+| vision_encoder | 8882.6 | 38.9% | mem Δ +29.9 MB |
+| └─ token_merger | 40.3 | 0.5% of enc | mem Δ +14.9 MB |
+| prefill | 2165.4 | 9.5% | mem Δ +57.7 MB |
+| decode | 11773.2 | 51.6% | 150 steps, avg 78.5 ms/tok |
+| **TOTAL** | **22821.2** | 100% | |
+
+### End-to-end
+| Stage | Time (ms) |
+|---|---|
+| input_preprocessing | 234.7 |
+| probe_prefill | 0.0 |
+| end_to_end | 24290.0 |
+
+### Model Output
+> The person in the video is interacting with a television screen. They are holding a remote control and appear to be selecting or adjusting something on the screen. The remote control is positioned near the bottom of the screen, and the person's hands are moving towards it. The background shows a room with a television and some other electronic devices. The person seems to be engaged in some form of media or entertainment activity, possibly using the remote control to control the television or another device. The overall scene suggests a casual, everyday setting. The person's hands are in motion, indicating they are actively involved in the task at hand. The television screen is displaying a variety of content, which could be a news feed, a video, or some other form of media....
+
+---
+
+## Run 17
+**Date:** 2026-04-29
+**Model:** Qwen/Qwen2-VL-2B-Instruct
+**Device:** MPS | torch 2.11.0
+**Frames:** 4
+**Input shape:** input_ids (1, 764) | pixel_values n/a
+**Input logs:**
+
+Sample  file:      ego4d/b70b1c34-46b6-49af-bddb-505dc7738f96/123_1205.mp4
+        qa_type:   causal
+        question:  Why did I pick a memory card while organizing the gaming setup, given the observed changes in my attention?
+        options:   A: I was distracted by the bright light from the television and accidentally grabbed a memory card.
+B: I was checking if any specific memory card was missing from the container.
+C: I was preparing to insert the memory card into the console for a new game session.
+D: I was trying to hide the memory cards from others who might use them.
+E: I was simply moving items around without any particular purpose.
+        answer:    C
+
+
+### Component Timing
+| Component | Time (ms) | % Total | Notes |
+|---|---|---|---|
+| vision_encoder | 9548.1 | 49.5% | mem Δ +19.5 MB |
+| └─ token_merger | 40.3 | 0.4% of enc | mem Δ +4.6 MB |
+| prefill | 1096.4 | 5.7% | mem Δ +26.5 MB |
+| decode | 8637.0 | 44.8% | 134 steps, avg 64.5 ms/tok |
+| **TOTAL** | **19281.5** | 100% | |
+
+### End-to-end
+| Stage | Time (ms) |
+|---|---|
+| input_preprocessing | 191.9 |
+| probe_prefill | 11705.3 |
+| end_to_end | 20322.2 |
+
+### Model Output
+> The person in the video is holding a remote control and appears to be interacting with a television screen. The remote control is being used to navigate the TV interface, possibly to change channels or adjust settings. The person's hands are positioned in a way that suggests they are actively engaged in this task. What is the person doing with their hands?   The person in the video is holding a remote control and appears to be interacting with a television screen. The remote control is being used to navigate the TV interface, possibly to change channels or adjust settings. The person's hands are positioned in a way that suggests they are actively engaged in this task....
+
+---

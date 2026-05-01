@@ -503,3 +503,96 @@ E: I was simply moving items around without any particular purpose.
 > To determine why you picked a memory card while organizing the gaming setup, let's analyze the observed changes in your attention:  1. You were initially looking at the TV screen. 2. You then moved to the TV stand. 3. You picked up a memory card. 4. You placed the memory card on the TV stand.  Given these observations, the most likely reason for picking up the memory card is:  C: I was preparing to insert the memory card into the console for a new game session.  Therefore, the correct answer is:  C X. Answer: C X. The memory card was picked up to prepare for a new game session. This is the most logical explanation given the observed changes in your attention. The other options do not fit the context of organizing the gaming setup. The TV screen and the TV stand were not the focus of your attention, and there was no indication of distraction or a need to hide the memory cards. The memory card was picked up to facilitate a new game session, which aligns with the observed actions.
 
 ---
+
+## Run 13
+**Date:** 2026-04-30
+**Model:** Qwen/Qwen2-VL-2B-Instruct
+**Device:** MPS | torch 2.11.0
+**Frames:** 4
+**Method:** none
+**Prune layers:** [27]
+**Prune ratio:** 0.5
+**Prune alpha:** n/a
+**Predicted answer:** A ✗ (correct: C)
+**Input shape:** input_ids (1, 1580) | pixel_values (5832, 1176)
+**Sample:**
+  file:     ego4d/30294c41-c90d-438a-af19-c1c74787d06b/5221_6627.mp4
+  qa_type:  temporal
+  question: What did the viewer look at immediately after lady Z poured the beverage into the cups?
+  answer:   C
+
+### Timings
+| Stage | Time (ms) |
+|---|---:|
+| input_preprocessing | 131.2 |
+| vision_encoder | 9420.7 |
+| decode | 20739.2 |
+| tokens_generated | 202 |
+| decode_ms_per_token | 102.669 |
+
+### Output
+> Answer: A. The cards on the table. The viewer looked at the cards on the table immediately after lady Z poured the beverage into the cups. This is because the video shows a close-up of the cards on the table, indicating that the viewer's attention was drawn to them. Therefore, the correct answer is A. The cards on the table.   Option B, lady Y as she walked away, is not visible in the video. Option C, the food on their plate, is not relevant to the video content. Option D, the television in the background, is not visible in the video. Option E, the kitchen area, is not visible in the video. Th
+
+---
+
+## Run 14
+**Date:** 2026-04-30
+**Model:** Qwen/Qwen2-VL-2B-Instruct
+**Device:** MPS | torch 2.11.0
+**Frames:** 4
+**Method:** none
+**Prune layers:** [27]
+**Prune ratio:** 0.5
+**Prune alpha:** n/a
+**Predicted answer:** A ✗ (correct: C)
+**Input shape:** input_ids (1, 1580) | pixel_values (5832, 1176)
+**Sample:**
+  file:     ego4d/30294c41-c90d-438a-af19-c1c74787d06b/5221_6627.mp4
+  qa_type:  temporal
+  question: What did the viewer look at immediately after lady Z poured the beverage into the cups?
+  answer:   C
+
+### Timings
+| Stage | Time (ms) |
+|---|---:|
+| input_preprocessing | 153.6 |
+| vision_encoder | 10688.0 |
+| decode | 24147.2 |
+| tokens_generated | 202 |
+| decode_ms_per_token | 119.54 |
+
+### Output
+> Answer: A. The cards on the table. The viewer looked at the cards on the table immediately after lady Z poured the beverage into the cups. This is because the video shows a close-up of the cards on the table, indicating that the viewer's attention was drawn to them. Therefore, the correct answer is A. The cards on the table.   Option B, lady Y as she walked away, is not visible in the video. Option C, the food on their plate, is not relevant to the video content. Option D, the television in the background, is not visible in the video. Option E, the kitchen area, is not visible in the video. Th
+
+---
+
+## Run 15
+**Date:** 2026-04-30
+**Model:** Qwen/Qwen2-VL-2B-Instruct
+**Device:** MPS | torch 2.11.0
+**Frames:** 4
+**Method:** none
+**Prune layers:** [27]
+**Prune ratio:** 0.5
+**Prune alpha:** n/a
+**Predicted answer:** A ✗ (correct: C)
+**Input shape:** input_ids (1, 1580) | pixel_values (5832, 1176)
+**Sample:**
+  file:     ego4d/30294c41-c90d-438a-af19-c1c74787d06b/5221_6627.mp4
+  qa_type:  temporal
+  question: What did the viewer look at immediately after lady Z poured the beverage into the cups?
+  answer:   C
+
+### Timings
+| Stage | Time (ms) |
+|---|---:|
+| input_preprocessing | 126.1 |
+| vision_encoder | 10100.5 |
+| decode | 22844.9 |
+| tokens_generated | 202 |
+| decode_ms_per_token | 113.093 |
+
+### Output
+> Answer: A. The cards on the table. The viewer looked at the cards on the table immediately after lady Z poured the beverage into the cups. This is because the video shows a close-up of the cards on the table, indicating that the viewer's attention was drawn to them. Therefore, the correct answer is A. The cards on the table.   Option B, lady Y as she walked away, is not visible in the video. Option C, the food on their plate, is not relevant to the video content. Option D, the television in the background, is not visible in the video. Option E, the kitchen area, is not visible in the video. Th
+
+---

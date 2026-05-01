@@ -4,6 +4,7 @@ import csv
 import datetime
 import importlib.util
 import json
+import random
 import re
 import sys
 import time
@@ -27,6 +28,27 @@ FRAMES_DIR = DATA_DIR / "frames"
 FORKED_MODEL_PATH = Path(__file__).parent / "modeling_qwen2_vl.py"
 LOG_FILE = Path(__file__).parent / "profile_forked_log.md"
 VIZ_DIR = Path(__file__).parent / "viz"
+
+CSV_COLUMNS = [
+    "config_tag",
+    "sample_idx",
+    "video_id",
+    "qa_type",
+    "prune_text",
+    "prune_gaze",
+    "prune_random",
+    "prune_alpha",
+    "prune_ratio",
+    "prune_layer",
+    "input_preprocessing_s",
+    "vision_encoder_s",
+    "decode_s",
+    "tokens_generated",
+    "decode_ms_per_token",
+    "correct_answer",
+    "predicted_answer",
+    "correct",
+]
 
 
 def load_forked_qwen2vl_class():
@@ -89,34 +111,63 @@ def extract_frames(video_path: str, n_frames: int) -> list[Image.Image]:
     return frames
 
 
-def load_sample() -> tuple[str, dict, str]:
+def load_samples(
+    num_samples: int,
+    seed: int,
+    qa_types: list[str] | None = None,
+) -> list[dict]:
+    """
+    Return a reproducibly-shuffled list of `num_samples` rows from metadata.csv
+    that have local frame folders on disk.  If `qa_types` is given, only rows
+    whose qa_type is in that list are considered.  Rows are balanced across
+    qa_types when possible (round-robin).
+    """
     with open(METADATA_CSV, newline="") as f:
-        rows = list(csv.DictReader(f))
+        all_rows = list(csv.DictReader(f))
 
-    for row in rows:
-        local_path = DATA_DIR / row["file_name"]
-        if not local_path.exists():
-            continue
+    # Filter to rows that have local pre-processed frame folders
+    available: list[dict] = []
+    for row in all_rows:
+        fn = row["file_name"].replace(".mp4", "")
+        folder = FRAMES_DIR / fn
+        if folder.exists() and list(folder.glob("*.jpg")):
+            available.append(row)
 
-        options = row["answer_options"].split("|")
-        options_str = "\n".join(o.strip() for o in options)
+    # Optional qa_type filter
+    if qa_types:
+        available = [r for r in available if r["qa_type"] in qa_types]
 
-        output_log = f"""
-Sample  file:      {row['file_name']}
-        qa_type:   {row['qa_type']}
-        question:  {row['question']}
-        options:   {options_str}
-        answer:    {row['correct_answer']}
-"""
+    if not available:
+        raise FileNotFoundError("No locally available clips match the filters.")
 
-        print(f"Sample  file:      {row['file_name']}")
-        print(f"        qa_type:   {row['qa_type']}")
-        print(f"        question:  {row['question']}")
-        print(f"        options:   {options_str}")
-        print(f"        answer:    {row['correct_answer']}")
-        return str(local_path), row, output_log
+    # Reproducible shuffle
+    rng = random.Random(seed)
+    rng.shuffle(available)
 
-    raise FileNotFoundError("No locally available clips match metadata.csv entries.")
+    # Balance across qa_types (round-robin interleave)
+    if qa_types and len(qa_types) > 1:
+        buckets: dict[str, list[dict]] = {qt: [] for qt in qa_types}
+        for row in available:
+            qt = row["qa_type"]
+            if qt in buckets:
+                buckets[qt].append(row)
+        balanced: list[dict] = []
+        iters = [iter(v) for v in buckets.values()]
+        while len(balanced) < num_samples:
+            added = False
+            for it in iters:
+                try:
+                    balanced.append(next(it))
+                    added = True
+                    if len(balanced) >= num_samples:
+                        break
+                except StopIteration:
+                    pass
+            if not added:
+                break
+        return balanced[:num_samples]
+
+    return available[:num_samples]
 
 
 def load_preprocessed_frames(file_name: str, n_frames: int):
@@ -145,23 +196,23 @@ def load_preprocessed_frames(file_name: str, n_frames: int):
 
     frames = [Image.open(p).convert("RGB") for p in selected]
     frame_gaze = [gaze_data.get(p.stem) for p in selected]
-    print(f"        frames from preprocess: {len(frames)}  (gaze available: {sum(1 for g in frame_gaze if g)})")
     return frames, frame_gaze
 
 
-def build_inputs(processor, n_frames: int):
-    video_path, row, output_log = load_sample()
+def build_inputs(processor, row: dict, n_frames: int):
+    """
+    Prepare model inputs for a single metadata row.
+    Returns (inputs, sample_log, frame_gaze, frames).
+    """
+    local_path = DATA_DIR / row["file_name"]
 
     frames, frame_gaze = load_preprocessed_frames(row["file_name"], n_frames)
     if frames is None:
-        frames = extract_frames(video_path, n_frames)
-        frame_gaze = None
-        print(f"        frames extracted (cv2): {len(frames)}")
+        if not local_path.exists():
+            raise FileNotFoundError(f"No video or frames for {row['file_name']}")
+        frames = extract_frames(str(local_path), n_frames)
+        frame_gaze = [None] * n_frames
 
-    # Use the actual VQA question so outputs are checkable against ground truth.
-    # Asking for step-by-step reasoning first produces multi-token output (needed
-    # for meaningful decode-time profiling) while "Answer: X" at the end is easy
-    # to parse for accuracy evaluation.
     options = row["answer_options"].split("|")
     options_str = "\n".join(o.strip() for o in options)
     prompt = (
@@ -170,6 +221,13 @@ def build_inputs(processor, n_frames: int):
         f"'Answer: X' where X is the letter of the correct option.\n\n"
         f"Question: {row['question']}\n\n"
         f"Options:\n{options_str}"
+    )
+
+    sample_log = (
+        f"  file:     {row['file_name']}\n"
+        f"  qa_type:  {row['qa_type']}\n"
+        f"  question: {row['question']}\n"
+        f"  answer:   {row['correct_answer']}"
     )
 
     messages = [
@@ -193,37 +251,94 @@ def build_inputs(processor, n_frames: int):
     device = "mps" if torch.backends.mps.is_available() else "cpu"
     inputs = inputs.to(device)
 
-    pixel_values_videos = getattr(inputs, "pixel_values_videos", None)
-    pixel_shape = pixel_values_videos.shape if pixel_values_videos is not None else "?"
-    print(f"        input_ids shape: {inputs.input_ids.shape}  pixel_values shape: {pixel_shape}")
-
-    return inputs, row, output_log, frame_gaze, frames
+    return inputs, sample_log, frame_gaze, frames
 
 
 def build_pruning_kwargs(
     prune_text: bool,
     prune_gaze: bool,
+    prune_random: bool,
     prune_layers: list[int],
     prune_ratio: float,
     prune_alpha: float = 0.5,
 ) -> dict:
-    """Build the kwargs dict that gets unpacked into model.generate().
-    gaze_scores is NOT included here — it is added to the dict after being
-    computed from frame_gaze + video_grid_thw (which are only available after
-    build_inputs runs).
     """
-    if not prune_text and not prune_gaze:
+    Build the kwargs dict passed to model.generate().
+    prune_random: keep tokens by uniform random scores — uses the gaze pathway
+                  internally (alpha=0.0, pure "gaze") but with random scores
+                  injected before the call.  Mutually exclusive with prune_gaze.
+    """
+    any_pruning = prune_text or prune_gaze or prune_random
+    if not any_pruning:
         return {}
+
     kwargs: dict = {
         "pruning_layers": prune_layers,
         "pruning_ratios": {layer: prune_ratio for layer in prune_layers},
     }
-    if prune_text:
+    if prune_text and not prune_random:
         kwargs["prune_text"] = True
-    if prune_gaze:
+    if prune_gaze and not prune_random:
         kwargs["prune_gaze"] = True
         kwargs["prune_alpha"] = prune_alpha
+    if prune_random:
+        # Random uses the gaze pathway; scores are injected separately.
+        # alpha=0.0 → combined = 1.0 * gaze_scores (pure random), text ignored.
+        kwargs["prune_gaze"] = True
+        kwargs["prune_alpha"] = 0.0
     return kwargs
+
+
+def compute_gaze_scores(
+    frame_gaze: list,
+    video_grid_thw: torch.Tensor,
+    sigma_frac: float = 0.15,
+    device: str = "cpu",
+) -> torch.Tensor:
+    """
+    Build a flat (T * H_m * W_m,) gaze-score tensor aligned with the LLM's
+    visual token sequence (frame-major, row-major within each frame).
+    """
+    T_raw, H_pre, W_pre = video_grid_thw[0].tolist()
+    T, H_pre, W_pre = int(T_raw), int(H_pre), int(W_pre)
+    H_m = H_pre // 2
+    W_m = W_pre // 2
+    sigma = sigma_frac * max(H_m, W_m)
+
+    rows_t = torch.arange(H_m, dtype=torch.float32)
+    cols_t = torch.arange(W_m, dtype=torch.float32)
+    grid_r, grid_c = torch.meshgrid(rows_t, cols_t, indexing="ij")
+
+    frame_score_list = []
+    for t in range(T):
+        gaze = frame_gaze[t] if t < len(frame_gaze) else None
+        if gaze is not None and "gaze_x" in gaze and "gaze_y" in gaze:
+            gc = float(gaze["gaze_x"]) * (W_m - 1)
+            gr = float(gaze["gaze_y"]) * (H_m - 1)
+            dist_sq = (grid_r - gr) ** 2 + (grid_c - gc) ** 2
+            scores = torch.exp(-dist_sq / (2.0 * sigma ** 2))
+        else:
+            scores = torch.ones(H_m, W_m, dtype=torch.float32)
+        frame_score_list.append(scores.reshape(-1))
+
+    return torch.cat(frame_score_list).to(device)
+
+
+def compute_random_scores(
+    video_grid_thw: torch.Tensor,
+    sample_idx: int,
+    seed: int = 42,
+    device: str = "cpu",
+) -> torch.Tensor:
+    """
+    Uniform random scores for visual tokens, reproducible per sample.
+    Shape: (T * H_m * W_m,).
+    """
+    T_raw, H_pre, W_pre = video_grid_thw[0].tolist()
+    T, H_m, W_m = int(T_raw), int(H_pre) // 2, int(W_pre) // 2
+    gen = torch.Generator()
+    gen.manual_seed(seed * 10_000 + sample_idx)
+    return torch.rand(T * H_m * W_m, generator=gen).to(device)
 
 
 def flatten_feature_output(pooler_output):
@@ -236,7 +351,6 @@ def extract_video_embeds(model, inputs):
     pixel_values_videos = getattr(inputs, "pixel_values_videos", None)
     if pixel_values_videos is None:
         return None
-
     video_outputs = model.get_video_features(
         pixel_values_videos=pixel_values_videos,
         video_grid_thw=inputs.video_grid_thw,
@@ -283,64 +397,7 @@ def build_prefill_inputs(model, inputs, video_embeds=None):
     }
 
 
-def compute_gaze_scores(
-    frame_gaze: list,
-    video_grid_thw: torch.Tensor,
-    sigma_frac: float = 0.15,
-    device: str = "cpu",
-) -> torch.Tensor:
-    """
-    Build a flat (T * H_m * W_m,) gaze-score tensor aligned with the LLM's visual
-    token sequence (frame-by-frame, row-major within each frame).
-
-    Args:
-        frame_gaze:     list[dict | None], one entry per sampled frame.
-                        Each dict must contain "gaze_x" and "gaze_y" in [0, 1]
-                        (normalised to original image size).
-        video_grid_thw: tensor of shape (num_videos, 3) = [T, H_pre, W_pre].
-                        T   = number of frames.
-                        H_pre / W_pre = pre-merger patch grid per frame.
-                        Post-merger: H_m = H_pre // 2, W_m = W_pre // 2.
-        sigma_frac:     Gaussian sigma expressed as a fraction of max(H_m, W_m).
-                        Default 0.15 → roughly 15 % of the grid width.
-        device:         Target device string (e.g. "mps", "cpu").
-
-    Returns:
-        gaze_scores: FloatTensor of shape (T * H_m * W_m,).
-                     Frames with no gaze data get uniform scores of 1.0
-                     (no gaze preference = keep all tokens equally).
-    """
-    T_raw, H_pre, W_pre = video_grid_thw[0].tolist()
-    T, H_pre, W_pre = int(T_raw), int(H_pre), int(W_pre)
-    H_m = H_pre // 2
-    W_m = W_pre // 2
-    sigma = sigma_frac * max(H_m, W_m)
-
-    # Coordinate grids over the post-merger token grid — shape (H_m, W_m) each
-    rows = torch.arange(H_m, dtype=torch.float32)
-    cols = torch.arange(W_m, dtype=torch.float32)
-    grid_r, grid_c = torch.meshgrid(rows, cols, indexing="ij")
-
-    frame_score_list = []
-    for t in range(T):
-        gaze = frame_gaze[t] if t < len(frame_gaze) else None
-        if gaze is not None and "gaze_x" in gaze and "gaze_y" in gaze:
-            # Map normalised [0, 1] image coordinates → post-merger token-grid indices
-            gc = float(gaze["gaze_x"]) * (W_m - 1)   # column in token grid
-            gr = float(gaze["gaze_y"]) * (H_m - 1)   # row    in token grid
-            dist_sq = (grid_r - gr) ** 2 + (grid_c - gc) ** 2
-            scores = torch.exp(-dist_sq / (2.0 * sigma ** 2))  # (H_m, W_m)
-        else:
-            # No gaze for this frame → uniform scores (gaze plays no role)
-            scores = torch.ones(H_m, W_m, dtype=torch.float32)
-
-        frame_score_list.append(scores.reshape(-1))   # (H_m * W_m,)
-
-    gaze_scores = torch.cat(frame_score_list)          # (T * H_m * W_m,)
-    return gaze_scores.to(device)
-
-
-def run_decoder_only_generate(model, prefill_inputs, generation_kwargs, max_new_tokens: int, min_new_tokens: int):
+def run_decoder_only_generate(model, prefill_inputs, generation_kwargs, max_new_tokens, min_new_tokens):
     return model.generate(
         input_ids=prefill_inputs["input_ids"],
         inputs_embeds=prefill_inputs["inputs_embeds"],
@@ -367,9 +424,19 @@ def decode_output(processor, inputs, generated_ids):
 
 
 def parse_answer(output: str) -> str | None:
-    """Extract the predicted letter from 'Answer: X' at the end of the output."""
     m = re.search(r"Answer:\s*([A-E])", output, re.IGNORECASE)
     return m.group(1).upper() if m else None
+
+
+def append_csv_row(csv_path: Path, row: dict):
+    """Append one result row to the CSV; write header if the file is new."""
+    is_new = not csv_path.exists()
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(csv_path, "a", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=CSV_COLUMNS)
+        if is_new:
+            writer.writeheader()
+        writer.writerow(row)
 
 
 def visualize_pruning(
@@ -383,24 +450,21 @@ def visualize_pruning(
 ):
     """
     Three-panel figure:
-      Row 0 — original frames
-      Row 1 — frames with per-token keep/score overlay (RdYlGn, green=kept/high)
-      Row 2 — bar chart of text-rater scores (green bar = selected as rater)
+      Row 0 — original frames (T temporal slots)
+      Row 1 — frames with per-token keep/score overlay (RdYlGn)
+      Row 2 — bar chart of text-rater scores (green = selected rater)
     """
     T_raw, H_pre, W_pre = video_grid_thw[0].tolist()
     T, H_pre, W_pre = int(T_raw), int(H_pre), int(W_pre)
     H_m, W_m = H_pre // 2, W_pre // 2
 
     debug = pruning_debug.get(prune_layer, {})
-    visual_keep_mask  = debug.get("visual_keep_mask")         # (T*H_m*W_m,) bool
-    combined_scores   = debug.get("combined_visual_scores")   # (T*H_m*W_m,) float | None
-    text_rater_scores = debug.get("text_rater_scores")        # (Lt,) float | None
-    rater_mask        = debug.get("rater_mask")               # (Lt,) bool  | None
-    text_pos          = debug.get("text_pos")                 # (Lt,) int   | None
+    visual_keep_mask  = debug.get("visual_keep_mask")
+    combined_scores   = debug.get("combined_visual_scores")
+    text_rater_scores = debug.get("text_rater_scores")
+    rater_mask        = debug.get("rater_mask")
+    text_pos          = debug.get("text_pos")
 
-    # T = temporal slots in LLM token grid (may differ from len(frames) due to
-    # Qwen2-VL temporal compression: 2 input frames → 1 temporal slot).
-    # Map each slot to the most representative input frame for display.
     n_input = len(frames)
     slot_to_frame = [
         min(int(round(t * (n_input - 1) / max(T - 1, 1))), n_input - 1)
@@ -415,47 +479,35 @@ def visualize_pruning(
     for t in range(T):
         frame_np = np.array(frames[slot_to_frame[t]])
 
-        # ── Row 0: original ──────────────────────────────────────────────────
         ax = fig.add_subplot(gs[0, t])
         ax.imshow(frame_np)
-        ax.set_title(f"Frame {t + 1} — original", fontsize=8)
+        ax.set_title(f"Slot {t + 1} — original", fontsize=8)
         ax.axis("off")
 
-        # ── Row 1: token overlay ─────────────────────────────────────────────
         ax = fig.add_subplot(gs[1, t])
         ax.imshow(frame_np)
-
         if visual_keep_mask is not None:
             tok_s = t * H_m * W_m
             tok_e = tok_s + H_m * W_m
-
-            # Use continuous scores when available, otherwise binary keep mask
             if combined_scores is not None:
-                # cast to float32 — numpy doesn't support bfloat16
                 grid = combined_scores[tok_s:tok_e].reshape(H_m, W_m).float().numpy()
             else:
                 grid = visual_keep_mask[tok_s:tok_e].reshape(H_m, W_m).numpy().astype(float)
-
-            # Resize grid to match frame pixel dimensions (nearest = sharp edges)
             grid_img = Image.fromarray((grid * 255).astype(np.uint8)).resize(
                 (frame_np.shape[1], frame_np.shape[0]), Image.NEAREST
             )
             rgba = plt.cm.RdYlGn(np.array(grid_img) / 255.0)
-            rgba[..., 3] = 0.50  # alpha
+            rgba[..., 3] = 0.50
             ax.imshow(rgba)
-
             kept  = int(visual_keep_mask[tok_s:tok_e].sum().item())
-            total = H_m * W_m
-            ax.set_title(f"Frame {t + 1} — kept {kept}/{total}", fontsize=8)
+            ax.set_title(f"Slot {t + 1} — kept {kept}/{H_m * W_m}", fontsize=8)
         ax.axis("off")
 
-    # ── Row 2: text rater scores ─────────────────────────────────────────────
     if has_text:
         ax = fig.add_subplot(gs[2, :])
         scores_np = text_rater_scores.float().numpy()
         rater_np  = rater_mask.numpy() if rater_mask is not None else np.zeros(len(scores_np), bool)
-
-        MAX_T = 80  # keep chart readable
+        MAX_T = 80
         tok_ids  = input_ids[0, text_pos].tolist()
         tok_strs = [
             processor.tokenizer.decode([tid], skip_special_tokens=False)
@@ -466,7 +518,6 @@ def visualize_pruning(
             scores_np = scores_np[:MAX_T]
             rater_np  = rater_np[:MAX_T]
             tok_strs  = tok_strs[:MAX_T]
-
         colors = ["#2ca02c" if r else "#1f77b4" for r in rater_np]
         ax.bar(range(len(scores_np)), scores_np, color=colors, width=0.85)
         ax.set_xticks(range(len(tok_strs)))
@@ -474,7 +525,7 @@ def visualize_pruning(
         ax.set_ylabel("Rater score")
         ax.set_title(
             f"Text-token rater scores  "
-            f"(green = selected rater, {int(rater_np.sum())}/{len(scores_np)} selected)",
+            f"(green = selected rater, {int(rater_np.sum())}/{len(scores_np)} shown)",
             fontsize=9,
         )
 
@@ -482,229 +533,99 @@ def visualize_pruning(
     save_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(save_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
-    print(f"        Visualisation saved: {save_path}")
+    print(f"        viz → {save_path}")
 
 
-def print_timing_summary(results):
-    print("\n── Profiling Summary ───────────────────────────────────────────────")
-    for key in ["model_load", "input_preprocessing", "vision_encoder", "decoder_only", "full_run"]:
-        r = results.get(key, {})
-        print(
-            f"  {key:<20} {r.get('time_s', 0) * 1000:8.1f} ms"
-            f"  mem Δ {r.get('mem_delta_mb', 0):+.1f} MB"
-        )
-
-
-def write_log(
-    device,
-    n_frames,
-    results,
-    inputs,
-    sample_log,
-    prune_text,
-    prune_gaze,
-    prune_layers,
-    prune_ratio,
-    prune_alpha,
-    decoder_output,
-    full_output,
-    correct_answer,
-    predicted_answer,
-    viz_path=None,
-):
-    run_number = 1
-    if LOG_FILE.exists():
-        content = LOG_FILE.read_text()
-        run_number = content.count("## Run ") + 1
-
-    pixel_values_videos = getattr(inputs, "pixel_values_videos", None)
-    pixel_shape = tuple(pixel_values_videos.shape) if pixel_values_videos is not None else "n/a"
-
-    accuracy_str = "n/a"
-    if predicted_answer is not None:
-        correct = predicted_answer == correct_answer
-        accuracy_str = f"{predicted_answer} {'✓' if correct else '✗'} (correct: {correct_answer})"
-
-    viz_str = f"`{viz_path}`" if viz_path else "none"
-
-    entry = f"""
-## Run {run_number}
-**Date:** {datetime.date.today()}
-**Model:** {MODEL_ID}
-**Forked model file:** {FORKED_MODEL_PATH}
-**Device:** {device.upper()} | torch {torch.__version__}
-**Frames:** {n_frames}
-**Prune text:** {prune_text}
-**Prune gaze:** {prune_gaze}
-**Prune layers:** {prune_layers}
-**Prune ratio:** {prune_ratio}
-**Prune alpha:** {prune_alpha}
-**Predicted answer:** {accuracy_str}
-**Visualisation:** {viz_str}
-**Input shape:** input_ids {tuple(inputs.input_ids.shape)} | pixel_values {pixel_shape}
-**Input logs:**
-{sample_log}
-
-### Timings
-| Stage | Time (ms) | Mem Δ (MB) |
-|---|---:|---:|
-| model_load | {results.get("model_load", {}).get("time_s", 0) * 1000:.1f} | {results.get("model_load", {}).get("mem_delta_mb", 0):+.1f} |
-| input_preprocessing | {results.get("input_preprocessing", {}).get("time_s", 0) * 1000:.1f} | {results.get("input_preprocessing", {}).get("mem_delta_mb", 0):+.1f} |
-| vision_encoder | {results.get("vision_encoder", {}).get("time_s", 0) * 1000:.1f} | {results.get("vision_encoder", {}).get("mem_delta_mb", 0):+.1f} |
-| decoder_only | {results.get("decoder_only", {}).get("time_s", 0) * 1000:.1f} | {results.get("decoder_only", {}).get("mem_delta_mb", 0):+.1f} |
-| full_run | {results.get("full_run", {}).get("time_s", 0) * 1000:.1f} | {results.get("full_run", {}).get("mem_delta_mb", 0):+.1f} |
-
-### Outputs
-**Decoder-only output**
-> {decoder_output.replace(chr(10), ' ')}
-
-**Full-run output**
-> {full_output.replace(chr(10), ' ')}
-
----
-"""
-
-    with open(LOG_FILE, "a") as f:
-        if run_number == 1:
-            f.write("# Forked Qwen2-VL Profiling Log\n")
-        f.write(entry)
-
-    print(f"\nLogged to {LOG_FILE}  (run #{run_number})")
-
-
-def main(
-    n_frames: int = 4,
-    prune_text: bool = False,
-    prune_gaze: bool = False,
-    prune_layers: list[int] | None = None,
-    prune_ratio: float = 0.5,
-    prune_alpha: float = 0.5,
-):
-    device = "mps" if torch.backends.mps.is_available() else "cpu"
-    prune_layers = prune_layers or [27]
-    generation_kwargs = build_pruning_kwargs(prune_text, prune_gaze, prune_layers, prune_ratio, prune_alpha)
-
-    print(f"Device: {device}  |  torch {torch.__version__}  |  frames: {n_frames}")
-
-    results = {}
-
-    # Flush MPS cache so leftover allocations from previous runs don't
-    # push the model into disk-offload territory.
-    if torch.backends.mps.is_available():
-        torch.mps.empty_cache()
-
-    with timed_block("model_load", results):
-        model = Qwen2VLForConditionalGeneration.from_pretrained(
-            MODEL_ID,
-            torch_dtype=torch.bfloat16,
-            device_map={"": device},   # force ALL weights onto the chosen device
-            attn_implementation="eager",
-        )
-        model.eval()
-        processor = AutoProcessor.from_pretrained(MODEL_ID)
-
-    mem_after_load = mps_allocated_mb()
-    print(
-        f"Model loaded in {results['model_load']['time_s']:.2f}s  "
-        f"({results['model_load']['mem_peak_mb']:.0f} MB MPS)"
-    )
-
-    # Hard check: if the model is below the expected full-MPS footprint it
-    # was partially offloaded and the run will be artificially slow. Abort
-    # early rather than waste minutes on a meaningless timing.
-    FULL_LOAD_MB = 4000  # Qwen2-VL-2B in bfloat16 ≈ 4418 MB
-    if torch.backends.mps.is_available() and mem_after_load < FULL_LOAD_MB:
-        raise RuntimeError(
-            f"Model only allocated {mem_after_load:.0f} MB — likely disk-offloaded. "
-            f"Close other apps to free MPS memory and retry."
-        )
+def run_sample(
+    model,
+    processor,
+    row: dict,
+    sample_idx: int,
+    n_frames: int,
+    prune_text: bool,
+    prune_gaze: bool,
+    prune_random: bool,
+    prune_layers: list[int],
+    prune_ratio: float,
+    prune_alpha: float,
+    config_tag: str,
+    device: str,
+    seed: int,
+    save_viz: bool = False,
+    viz_suffix: str = "",
+) -> dict:
+    """
+    Run inference on a single sample row.
+    Returns a dict matching CSV_COLUMNS (plus 'decoder_output' for markdown log).
+    """
+    results: dict = {}
 
     with timed_block("input_preprocessing", results):
-        inputs, row, sample_log, frame_gaze, frames = build_inputs(processor, n_frames)
+        inputs, sample_log, frame_gaze, frames = build_inputs(processor, row, n_frames)
 
-    # gaze scores — needs both frame_gaze AND inputs.video_grid_thw
-    if prune_gaze:
+    # Base pruning kwargs (no gaze_scores yet)
+    generation_kwargs = build_pruning_kwargs(
+        prune_text, prune_gaze, prune_random, prune_layers, prune_ratio, prune_alpha
+    )
+
+    # Inject gaze or random scores into kwargs
+    if prune_gaze and not prune_random:
         gaze_scores = compute_gaze_scores(
             frame_gaze,
             inputs.video_grid_thw,
             sigma_frac=0.15,
-            device=str(inputs.input_ids.device),
+            device=device,
         )
         generation_kwargs["gaze_scores"] = gaze_scores
-        n_nonuniform = int((gaze_scores < 0.99).sum().item())
-        print(f"        gaze_scores shape: {tuple(gaze_scores.shape)}  focused tokens: {n_nonuniform}")
 
-    print("\nWarming up...")
-    with torch.inference_mode():
-        _ = model.generate(
-            **inputs,
-            use_cache=True,
-            max_new_tokens=16,
-            min_new_tokens=8,
-            **generation_kwargs,
+    if prune_random:
+        rand_scores = compute_random_scores(
+            inputs.video_grid_thw,
+            sample_idx=sample_idx,
+            seed=seed,
+            device=device,
         )
-    mps_sync()
-    print("Warmup done.\n")
+        generation_kwargs["gaze_scores"] = rand_scores
 
-    print("\nEncoding video...")
     with torch.inference_mode():
         with timed_block("vision_encoder", results):
             video_embeds = extract_video_embeds(model, inputs)
 
-    print("Encoding video done.\n")
-
     prefill_inputs = build_prefill_inputs(model, inputs, video_embeds=video_embeds)
 
-    print("\Decoding...")
     with torch.inference_mode():
-        with timed_block("decoder_only", results):
-            decoder_generated_ids = run_decoder_only_generate(
+        with timed_block("decode", results):
+            generated_ids = run_decoder_only_generate(
                 model,
                 prefill_inputs,
                 generation_kwargs,
                 max_new_tokens=512,
                 min_new_tokens=200,
             )
-    print("Decoding done.\n")
 
-    print("\Running full run...")
-    with torch.inference_mode():
-        with timed_block("full_run", results):
-            full_generated_ids = model.generate(
-                **inputs,
-                use_cache=True,
-                max_new_tokens=512,
-                min_new_tokens=200,
-                **generation_kwargs,
-            )
-    print("Full run done.\n")
-
-    decoder_output = decode_output(processor, inputs, decoder_generated_ids)
-    full_output    = decode_output(processor, inputs, full_generated_ids)
-
+    decoder_output  = decode_output(processor, inputs, generated_ids)
     predicted_answer = parse_answer(decoder_output)
     correct_answer   = row["correct_answer"].strip()
-    correct          = predicted_answer == correct_answer if predicted_answer else None
+    is_correct       = int(predicted_answer == correct_answer) if predicted_answer else None
 
-    print_timing_summary(results)
-    print(f"\nReference answer : {correct_answer}")
-    print(f"Predicted answer : {predicted_answer}  {'✓' if correct else '✗' if correct is not None else '?'}")
-    print(f"\nDecoder-only output: {decoder_output[:400]}")
-    print(f"\nFull-run output:     {full_output[:400]}")
+    tokens_generated     = generated_ids.shape[1] - inputs.input_ids.shape[1]
+    decode_s             = results["decode"]["time_s"]
+    decode_ms_per_token  = (decode_s * 1000 / tokens_generated) if tokens_generated > 0 else None
 
-    # ── Pruning visualisation ────────────────────────────────────────────────
-    viz_path = None
-    pruning_active = prune_text or prune_gaze
-    if pruning_active:
-        pruning_debug = getattr(
-            model.model.language_model, "_pruning_debug", {}
-        )
+    correct_sym = "✓" if is_correct else ("✗" if is_correct is not None else "?")
+    print(
+        f"  [{sample_idx:03d}] {row['qa_type']:8s}  "
+        f"pred={predicted_answer or '?'} {correct_sym}  "
+        f"decode={decode_s:.2f}s  {decode_ms_per_token:.1f}ms/tok  "
+        f"toks={tokens_generated}"
+    )
+
+    # Optional visualisation (only for single-sample runs or when explicitly requested)
+    if save_viz and (prune_text or prune_gaze or prune_random):
+        pruning_debug = getattr(model.model.language_model, "_pruning_debug", {})
         if pruning_debug:
-            run_number = (
-                LOG_FILE.read_text().count("## Run ") + 1 if LOG_FILE.exists() else 1
-            )
-            config_tag = f"{'t' if prune_text else ''}{'g' if prune_gaze else ''}_l{prune_layers[0]}_r{prune_ratio}"
-            viz_path = VIZ_DIR / f"run{run_number:02d}_{config_tag}.png"
+            tag = config_tag.replace("/", "_")
+            viz_path = VIZ_DIR / f"s{sample_idx:03d}_{tag}{viz_suffix}.png"
             visualize_pruning(
                 frames=frames,
                 video_grid_thw=inputs.video_grid_thw.cpu(),
@@ -715,40 +636,318 @@ def main(
                 save_path=viz_path,
             )
 
-    write_log(
-        device=device,
-        n_frames=n_frames,
-        results=results,
-        inputs=inputs,
-        sample_log=sample_log,
-        prune_text=prune_text,
-        prune_gaze=prune_gaze,
-        prune_layers=prune_layers,
-        prune_ratio=prune_ratio,
-        prune_alpha=prune_alpha,
-        decoder_output=decoder_output,
-        full_output=full_output,
-        correct_answer=correct_answer,
-        predicted_answer=predicted_answer,
-        viz_path=viz_path,
+    csv_row = {
+        "config_tag":            config_tag,
+        "sample_idx":            sample_idx,
+        "video_id":              row["video_id"],
+        "qa_type":               row["qa_type"],
+        "prune_text":            int(prune_text and not prune_random),
+        "prune_gaze":            int(prune_gaze and not prune_random),
+        "prune_random":          int(prune_random),
+        "prune_alpha":           prune_alpha if (prune_text or prune_gaze) and not prune_random else "",
+        "prune_ratio":           prune_ratio if (prune_text or prune_gaze or prune_random) else "",
+        "prune_layer":           prune_layers[0] if (prune_text or prune_gaze or prune_random) else "",
+        "input_preprocessing_s": round(results["input_preprocessing"]["time_s"], 4),
+        "vision_encoder_s":      round(results["vision_encoder"]["time_s"], 4),
+        "decode_s":              round(decode_s, 4),
+        "tokens_generated":      tokens_generated,
+        "decode_ms_per_token":   round(decode_ms_per_token, 3) if decode_ms_per_token else "",
+        "correct_answer":        correct_answer,
+        "predicted_answer":      predicted_answer or "",
+        "correct":               is_correct if is_correct is not None else "",
+    }
+    # stash for markdown (not written to CSV)
+    csv_row["_decoder_output"]  = decoder_output
+    csv_row["_sample_log"]      = sample_log
+    csv_row["_input_ids_shape"] = tuple(inputs.input_ids.shape)
+    pv = getattr(inputs, "pixel_values_videos", None)
+    csv_row["_pixel_shape"]     = tuple(pv.shape) if pv is not None else "n/a"
+
+    return csv_row
+
+
+def write_log_entry(
+    device: str,
+    n_frames: int,
+    csv_row: dict,
+    prune_text: bool,
+    prune_gaze: bool,
+    prune_random: bool,
+    prune_layers: list[int],
+    prune_ratio: float,
+    prune_alpha: float,
+):
+    """Write a single-sample markdown entry (used when --num-samples 1)."""
+    run_number = 1
+    if LOG_FILE.exists():
+        run_number = LOG_FILE.read_text().count("## Run ") + 1
+
+    pred  = csv_row["predicted_answer"]
+    corr  = csv_row["correct_answer"]
+    is_ok = csv_row["correct"]
+    acc_str = f"{pred} {'✓' if is_ok else '✗'} (correct: {corr})" if pred else "n/a"
+
+    method_str = (
+        "random" if prune_random
+        else ("text+gaze" if (prune_text and prune_gaze)
+              else ("text" if prune_text
+                    else ("gaze" if prune_gaze else "none")))
     )
+
+    entry = f"""
+## Run {run_number}
+**Date:** {datetime.date.today()}
+**Model:** {MODEL_ID}
+**Device:** {device.upper()} | torch {torch.__version__}
+**Frames:** {n_frames}
+**Method:** {method_str}
+**Prune layers:** {prune_layers}
+**Prune ratio:** {prune_ratio}
+**Prune alpha:** {prune_alpha if (prune_text or prune_gaze) and not prune_random else "n/a"}
+**Predicted answer:** {acc_str}
+**Input shape:** input_ids {csv_row['_input_ids_shape']} | pixel_values {csv_row['_pixel_shape']}
+**Sample:**
+{csv_row['_sample_log']}
+
+### Timings
+| Stage | Time (ms) |
+|---|---:|
+| input_preprocessing | {csv_row['input_preprocessing_s'] * 1000:.1f} |
+| vision_encoder | {csv_row['vision_encoder_s'] * 1000:.1f} |
+| decode | {csv_row['decode_s'] * 1000:.1f} |
+| tokens_generated | {csv_row['tokens_generated']} |
+| decode_ms_per_token | {csv_row['decode_ms_per_token']} |
+
+### Output
+> {csv_row['_decoder_output'].replace(chr(10), ' ')[:600]}
+
+---
+"""
+
+    with open(LOG_FILE, "a") as f:
+        if run_number == 1:
+            f.write("# Forked Qwen2-VL Profiling Log\n")
+        f.write(entry)
+    print(f"Logged → {LOG_FILE}  (run #{run_number})")
+
+
+def print_batch_summary(config_tag: str, rows: list[dict]):
+    """Print aggregate stats at the end of a multi-sample run."""
+    n = len(rows)
+    answered  = [r for r in rows if r["correct"] != ""]
+    n_correct  = sum(r["correct"] for r in answered)
+    accuracy   = n_correct / len(answered) if answered else float("nan")
+    times      = [r["decode_ms_per_token"] for r in rows if r["decode_ms_per_token"] != ""]
+    mean_time  = sum(times) / len(times) if times else float("nan")
+
+    print(f"\n{'═'*60}")
+    print(f"  Config:   {config_tag}")
+    print(f"  Samples:  {n}  (answered: {len(answered)})")
+    print(f"  Accuracy: {n_correct}/{len(answered)} = {accuracy:.1%}")
+    print(f"  Mean decode: {mean_time:.1f} ms/tok")
+
+    # breakdown by qa_type
+    for qt in sorted({r["qa_type"] for r in rows}):
+        subset = [r for r in answered if r["qa_type"] == qt]
+        nc = sum(r["correct"] for r in subset)
+        print(f"    {qt:10s}  {nc}/{len(subset)} = {nc/len(subset):.1%}" if subset else f"    {qt}: no data")
+    print(f"{'═'*60}\n")
+
+
+def main(
+    n_frames: int = 4,
+    num_samples: int = 1,
+    seed: int = 42,
+    qa_types: list[str] | None = None,
+    prune_text: bool = False,
+    prune_gaze: bool = False,
+    prune_random: bool = False,
+    prune_layers: list[int] | None = None,
+    prune_ratio: float = 0.5,
+    prune_alpha: float = 0.5,
+    config_tag: str = "",
+    results_csv: Path | None = None,
+    save_viz: bool = False,
+):
+    device = "mps" if torch.backends.mps.is_available() else "cpu"
+    prune_layers = prune_layers or [27]
+
+    # Auto-generate config_tag if not provided
+    if not config_tag:
+        if prune_random:
+            method = "random"
+        elif prune_text and prune_gaze:
+            method = f"combined_a{prune_alpha}"
+        elif prune_text:
+            method = "text"
+        elif prune_gaze:
+            method = "gaze"
+        else:
+            method = "no_prune"
+        active = prune_text or prune_gaze or prune_random
+        config_tag = f"{method}_l{prune_layers[0]}_r{prune_ratio}" if active else "no_prune"
+
+    print(f"{'─'*60}")
+    print(f"  Config tag : {config_tag}")
+    print(f"  Device     : {device}  |  torch {torch.__version__}")
+    print(f"  Samples    : {num_samples}  (seed={seed})")
+    print(f"  Frames     : {n_frames}")
+    print(f"  Pruning    : text={prune_text}  gaze={prune_gaze}  random={prune_random}")
+    if prune_text or prune_gaze or prune_random:
+        print(f"  Layers/ratio: {prune_layers} / {prune_ratio}  alpha={prune_alpha}")
+    print(f"{'─'*60}")
+
+    # ── Load model ────────────────────────────────────────────────────────────
+    if torch.backends.mps.is_available():
+        torch.mps.empty_cache()
+
+    t_load = time.perf_counter()
+    model = Qwen2VLForConditionalGeneration.from_pretrained(
+        MODEL_ID,
+        torch_dtype=torch.bfloat16,
+        device_map={"": device},
+        attn_implementation="eager",
+    )
+    model.eval()
+    processor = AutoProcessor.from_pretrained(MODEL_ID)
+    mps_sync()
+    load_s = time.perf_counter() - t_load
+
+    mem_after_load = mps_allocated_mb()
+    print(f"Model loaded in {load_s:.2f}s  ({mem_after_load:.0f} MB)")
+
+    FULL_LOAD_MB = 4000
+    if torch.backends.mps.is_available() and mem_after_load < FULL_LOAD_MB:
+        raise RuntimeError(
+            f"Model only allocated {mem_after_load:.0f} MB — likely disk-offloaded. "
+            f"Close other apps to free memory and retry."
+        )
+
+    # ── Load samples ─────────────────────────────────────────────────────────
+    samples = load_samples(num_samples, seed, qa_types)
+    print(f"Loaded {len(samples)} samples.")
+
+    # ── Warmup (single forward, not timed, uses first sample) ────────────────
+    print("\nWarming up...")
+    warmup_inputs, _, warmup_frame_gaze, _ = build_inputs(processor, samples[0], n_frames)
+    generation_kwargs_warmup = build_pruning_kwargs(
+        prune_text, prune_gaze, prune_random, prune_layers, prune_ratio, prune_alpha
+    )
+    if prune_random:
+        generation_kwargs_warmup["gaze_scores"] = compute_random_scores(
+            warmup_inputs.video_grid_thw, sample_idx=0, seed=seed, device=device
+        )
+    elif prune_gaze:
+        generation_kwargs_warmup["gaze_scores"] = compute_gaze_scores(
+            warmup_frame_gaze, warmup_inputs.video_grid_thw, device=device
+        )
+    with torch.inference_mode():
+        _ = model.generate(
+            **warmup_inputs,
+            use_cache=True,
+            max_new_tokens=8,
+            **generation_kwargs_warmup,
+        )
+    mps_sync()
+    del warmup_inputs
+    print("Warmup done.\n")
+
+    # ── Sample loop ───────────────────────────────────────────────────────────
+    all_results: list[dict] = []
+
+    for idx, row in enumerate(samples):
+        csv_row = run_sample(
+            model=model,
+            processor=processor,
+            row=row,
+            sample_idx=idx,
+            n_frames=n_frames,
+            prune_text=prune_text,
+            prune_gaze=prune_gaze,
+            prune_random=prune_random,
+            prune_layers=prune_layers,
+            prune_ratio=prune_ratio,
+            prune_alpha=prune_alpha,
+            config_tag=config_tag,
+            device=device,
+            seed=seed,
+            save_viz=save_viz or (num_samples == 1),
+            viz_suffix="",
+        )
+        all_results.append(csv_row)
+
+        # Always write CSV row immediately (safe even if run crashes mid-way)
+        if results_csv:
+            clean = {k: v for k, v in csv_row.items() if not k.startswith("_")}
+            append_csv_row(results_csv, clean)
+
+        # Markdown log for single-sample runs (backward compat)
+        if num_samples == 1:
+            write_log_entry(
+                device=device,
+                n_frames=n_frames,
+                csv_row=csv_row,
+                prune_text=prune_text,
+                prune_gaze=prune_gaze,
+                prune_random=prune_random,
+                prune_layers=prune_layers,
+                prune_ratio=prune_ratio,
+                prune_alpha=prune_alpha,
+            )
+
+    print_batch_summary(config_tag, all_results)
+    if results_csv:
+        print(f"Results appended → {results_csv}")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--frames", type=int, default=4, help="Number of frames to sample from the clip.")
-    parser.add_argument("--prune-text", action="store_true", help="Enable forked in-model SparseVLM text pruning.")
-    parser.add_argument("--prune-gaze", action="store_true", help="Enable forked in-model gaze pruning.")
-    parser.add_argument("--prune-layers", type=int, nargs="+", default=[27], help="Decoder layer indices to prune.")
-    parser.add_argument("--prune-ratio", type=float, default=0.5, help="Ratio of visual tokens to keep.")
-    parser.add_argument("--prune-alpha", type=float, default=0.5, help="Ratio of gaze pruning importance vs text pruning importance")
+    parser = argparse.ArgumentParser(description="Profile forked Qwen2-VL with visual token pruning.")
+
+    # ── Data ──────────────────────────────────────────────────────────────────
+    parser.add_argument("--frames",      type=int,   default=4,    help="Frames per clip.")
+    parser.add_argument("--num-samples", type=int,   default=1,    help="Number of samples to evaluate.")
+    parser.add_argument("--seed",        type=int,   default=42,   help="Random seed for sample selection.")
+    parser.add_argument("--qa-types",    nargs="+",  default=None,
+                        choices=["causal", "spatial", "temporal"],
+                        help="QA types to include (default: all).")
+
+    # ── Pruning ───────────────────────────────────────────────────────────────
+    parser.add_argument("--prune-text",   action="store_true", help="Text-rater pruning.")
+    parser.add_argument("--prune-gaze",   action="store_true", help="Gaze-guided pruning.")
+    parser.add_argument("--prune-random", action="store_true", help="Random pruning baseline.")
+    parser.add_argument("--prune-layers", type=int, nargs="+", default=[27],
+                        help="Decoder layer indices to prune at.")
+    parser.add_argument("--prune-ratio",  type=float, default=0.5,
+                        help="Fraction of visual tokens to keep (0–1).")
+    parser.add_argument("--prune-alpha",  type=float, default=0.5,
+                        help="Alpha: weight of text scores vs gaze scores (1=pure text, 0=pure gaze).")
+
+    # ── Output ────────────────────────────────────────────────────────────────
+    parser.add_argument("--config-tag",   type=str, default="",
+                        help="Label for this condition in the results CSV.")
+    parser.add_argument("--results-csv",  type=Path, default=None,
+                        help="Path to append per-sample results CSV.")
+    parser.add_argument("--save-viz",     action="store_true",
+                        help="Save pruning visualisation PNG for every sample.")
+
     args = parser.parse_args()
+
+    # Validate: prune-random is mutually exclusive with prune-text/prune-gaze
+    if args.prune_random and (args.prune_text or args.prune_gaze):
+        parser.error("--prune-random is mutually exclusive with --prune-text and --prune-gaze.")
 
     main(
         n_frames=args.frames,
+        num_samples=args.num_samples,
+        seed=args.seed,
+        qa_types=args.qa_types,
         prune_text=args.prune_text,
         prune_gaze=args.prune_gaze,
+        prune_random=args.prune_random,
         prune_layers=args.prune_layers,
         prune_ratio=args.prune_ratio,
         prune_alpha=args.prune_alpha,
+        config_tag=args.config_tag,
+        results_csv=args.results_csv,
+        save_viz=args.save_viz,
     )

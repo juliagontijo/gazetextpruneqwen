@@ -798,7 +798,11 @@ def main(
     print(f"{'─'*60}")
 
     # ── Load model ────────────────────────────────────────────────────────────
+    # Brief pause to let the OS reclaim MPS memory from any previous process
+    # that may not have fully released it yet.
     if torch.backends.mps.is_available():
+        import time as _time
+        _time.sleep(5)
         torch.mps.empty_cache()
 
     t_load = time.perf_counter()
@@ -816,11 +820,12 @@ def main(
     mem_after_load = mps_allocated_mb()
     print(f"Model loaded in {load_s:.2f}s  ({mem_after_load:.0f} MB)")
 
-    FULL_LOAD_MB = 4000
+    FULL_LOAD_MB = 4300  # full bfloat16 load = ~4418 MB; abort if significantly below
     if torch.backends.mps.is_available() and mem_after_load < FULL_LOAD_MB:
         raise RuntimeError(
-            f"Model only allocated {mem_after_load:.0f} MB — likely disk-offloaded. "
-            f"Close other apps to free memory and retry."
+            f"Model only allocated {mem_after_load:.0f} MB (expected ~4418 MB) — "
+            f"likely partial disk-offload from residual MPS memory of a previous run. "
+            f"Wait 15s and retry, or restart your terminal."
         )
 
     # ── Load samples ─────────────────────────────────────────────────────────

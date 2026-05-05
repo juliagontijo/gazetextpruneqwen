@@ -25,9 +25,26 @@ MODEL_ID = "Qwen/Qwen2-VL-2B-Instruct"
 DATA_DIR = Path(__file__).parent / "data" / "EgoGazeVQA_full"
 METADATA_CSV = DATA_DIR / "metadata.csv"
 FRAMES_DIR = DATA_DIR / "frames"
+CAPTION_GT_JSON = DATA_DIR / "caption_ground_truth.json"
 FORKED_MODEL_PATH = Path(__file__).parent / "modeling_qwen2_vl.py"
 LOG_FILE = Path(__file__).parent / "profile_forked_log.md"
 VIZ_DIR = Path(__file__).parent / "viz"
+
+# Lazy-loaded once; populated by load_caption_gt_cache() the first time it's needed.
+_CAPTION_GT_CACHE: dict | None = None
+
+
+def load_caption_gt_cache() -> dict:
+    """Load (and memoise) the precomputed caption ground-truth JSON."""
+    global _CAPTION_GT_CACHE
+    if _CAPTION_GT_CACHE is not None:
+        return _CAPTION_GT_CACHE
+    if CAPTION_GT_JSON.exists():
+        with open(CAPTION_GT_JSON) as f:
+            _CAPTION_GT_CACHE = json.load(f)
+    else:
+        _CAPTION_GT_CACHE = {}
+    return _CAPTION_GT_CACHE
 
 CSV_COLUMNS = [
     "config_tag",
@@ -199,9 +216,44 @@ def load_preprocessed_frames(file_name: str, n_frames: int):
     return frames, frame_gaze
 
 
-def build_inputs(processor, row: dict, n_frames: int):
+def build_caption_ground_truth(frame_gaze: list, file_name: str | None = None) -> str:
+    """
+    Return the verbose ground-truth caption for this clip.
+
+    Priority:
+      1. If `file_name` is given AND the precomputed cache contains it,
+         return the cached string (zero work).
+      2. Otherwise, concatenate per-frame Ego4D narrations on the fly.
+
+    Speaker codes:  #C = camera wearer,  #O = other person observed.
+    """
+    # Fast path: precomputed cache
+    if file_name is not None:
+        cache = load_caption_gt_cache()
+        if file_name in cache:
+            return cache[file_name]
+
+    # Fallback: build from already-loaded gaze data
+    parts = []
+    for g in frame_gaze:
+        if not g:
+            continue
+        text = g.get("narration_text", "").strip()
+        if not text:
+            continue
+        text = text.replace("#C C", "The camera wearer")
+        text = text.replace("#C", "The camera wearer")
+        text = text.replace("#O", "Another person")
+        if not parts or parts[-1] != text:  # dedupe consecutive duplicates
+            parts.append(text)
+    return " ".join(parts)
+
+
+def build_inputs(processor, row: dict, n_frames: int, task: str = "mcq"):
     """
     Prepare model inputs for a single metadata row.
+    task: "mcq"     -> multiple-choice prompt (original behaviour)
+          "caption" -> open-ended description prompt
     Returns (inputs, sample_log, frame_gaze, frames).
     """
     local_path = DATA_DIR / row["file_name"]
@@ -213,22 +265,36 @@ def build_inputs(processor, row: dict, n_frames: int):
         frames = extract_frames(str(local_path), n_frames)
         frame_gaze = [None] * n_frames
 
-    options = row["answer_options"].split("|")
-    options_str = "\n".join(o.strip() for o in options)
-    prompt = (
-        f"Watch the video carefully and answer the following multiple-choice question.\n"
-        f"Think step by step about what you observe, then end your response with "
-        f"'Answer: X' where X is the letter of the correct option.\n\n"
-        f"Question: {row['question']}\n\n"
-        f"Options:\n{options_str}"
-    )
+    if task == "caption":
+        prompt = (
+            "Watch the video carefully and describe step by step what the person is doing. "
+            "Focus on the objects they interact with, the actions they perform, and any "
+            "other people in the scene. Be specific and detailed."
+        )
+        gt_preview = build_caption_ground_truth(frame_gaze, file_name=row["file_name"])
+        sample_log = (
+            f"  file:     {row['file_name']}\n"
+            f"  qa_type:  {row['qa_type']}\n"
+            f"  task:     caption\n"
+            f"  gt:       {gt_preview[:120]}"
+        )
+    else:
+        options = row["answer_options"].split("|")
+        options_str = "\n".join(o.strip() for o in options)
+        prompt = (
+            f"Watch the video carefully and answer the following multiple-choice question.\n"
+            f"Think step by step about what you observe, then end your response with "
+            f"'Answer: X' where X is the letter of the correct option.\n\n"
+            f"Question: {row['question']}\n\n"
+            f"Options:\n{options_str}"
+        )
 
-    sample_log = (
-        f"  file:     {row['file_name']}\n"
-        f"  qa_type:  {row['qa_type']}\n"
-        f"  question: {row['question']}\n"
-        f"  answer:   {row['correct_answer']}"
-    )
+        sample_log = (
+            f"  file:     {row['file_name']}\n"
+            f"  qa_type:  {row['qa_type']}\n"
+            f"  question: {row['question']}\n"
+            f"  answer:   {row['correct_answer']}"
+        )
 
     messages = [
         {
@@ -551,6 +617,7 @@ def run_sample(
     config_tag: str,
     device: str,
     seed: int,
+    task: str = "mcq",
     save_viz: bool = False,
     viz_suffix: str = "",
 ) -> dict:
@@ -561,7 +628,7 @@ def run_sample(
     results: dict = {}
 
     with timed_block("input_preprocessing", results):
-        inputs, sample_log, frame_gaze, frames = build_inputs(processor, row, n_frames)
+        inputs, sample_log, frame_gaze, frames = build_inputs(processor, row, n_frames, task=task)
 
     # Base pruning kwargs (no gaze_scores yet)
     generation_kwargs = build_pruning_kwargs(
@@ -604,21 +671,36 @@ def run_sample(
             )
 
     decoder_output  = decode_output(processor, inputs, generated_ids)
-    predicted_answer = parse_answer(decoder_output)
-    correct_answer   = row["correct_answer"].strip()
-    is_correct       = int(predicted_answer == correct_answer) if predicted_answer else None
+    if task == "caption":
+        # Store full output as prediction; ground truth = concatenated narrations.
+        # Quality scoring (BERTScore) is computed offline by score_captions.py.
+        predicted_answer = decoder_output.strip().replace("\n", " ")
+        correct_answer   = build_caption_ground_truth(frame_gaze, file_name=row["file_name"])
+        is_correct       = None  # filled in offline
+    else:
+        predicted_answer = parse_answer(decoder_output)
+        correct_answer   = row["correct_answer"].strip()
+        is_correct       = int(predicted_answer == correct_answer) if predicted_answer else None
 
     tokens_generated     = generated_ids.shape[1] - inputs.input_ids.shape[1]
     decode_s             = results["decode"]["time_s"]
     decode_ms_per_token  = (decode_s * 1000 / tokens_generated) if tokens_generated > 0 else None
 
     correct_sym = "✓" if is_correct else ("✗" if is_correct is not None else "?")
-    print(
-        f"  [{sample_idx:03d}] {row['qa_type']:8s}  "
-        f"pred={predicted_answer or '?'} {correct_sym}  "
-        f"decode={decode_s:.2f}s  {decode_ms_per_token:.1f}ms/tok  "
-        f"toks={tokens_generated}"
-    )
+    if task == "caption":
+        pred_disp = (predicted_answer[:40] + "…") if len(predicted_answer) > 40 else predicted_answer
+        print(
+            f"  [{sample_idx:03d}] {row['qa_type']:8s}  "
+            f"caption  decode={decode_s:.2f}s  {decode_ms_per_token:.1f}ms/tok  "
+            f"toks={tokens_generated}  pred={pred_disp!r}"
+        )
+    else:
+        print(
+            f"  [{sample_idx:03d}] {row['qa_type']:8s}  "
+            f"pred={predicted_answer or '?'} {correct_sym}  "
+            f"decode={decode_s:.2f}s  {decode_ms_per_token:.1f}ms/tok  "
+            f"toks={tokens_generated}"
+        )
 
     # Optional visualisation (only for single-sample runs or when explicitly requested)
     if save_viz and (prune_text or prune_gaze or prune_random):
@@ -743,14 +825,18 @@ def print_batch_summary(config_tag: str, rows: list[dict]):
     print(f"\n{'═'*60}")
     print(f"  Config:   {config_tag}")
     print(f"  Samples:  {n}  (answered: {len(answered)})")
-    print(f"  Accuracy: {n_correct}/{len(answered)} = {accuracy:.1%}")
+    if answered:
+        print(f"  Accuracy: {n_correct}/{len(answered)} = {accuracy:.1%}")
+    else:
+        print(f"  Accuracy: n/a (caption mode — score offline with score_captions.py)")
     print(f"  Mean decode: {mean_time:.1f} ms/tok")
 
-    # breakdown by qa_type
-    for qt in sorted({r["qa_type"] for r in rows}):
-        subset = [r for r in answered if r["qa_type"] == qt]
-        nc = sum(r["correct"] for r in subset)
-        print(f"    {qt:10s}  {nc}/{len(subset)} = {nc/len(subset):.1%}" if subset else f"    {qt}: no data")
+    # breakdown by qa_type (only if MCQ-graded)
+    if answered:
+        for qt in sorted({r["qa_type"] for r in rows}):
+            subset = [r for r in answered if r["qa_type"] == qt]
+            nc = sum(r["correct"] for r in subset)
+            print(f"    {qt:10s}  {nc}/{len(subset)} = {nc/len(subset):.1%}" if subset else f"    {qt}: no data")
     print(f"{'═'*60}\n")
 
 
@@ -759,6 +845,7 @@ def main(
     num_samples: int = 1,
     seed: int = 42,
     qa_types: list[str] | None = None,
+    task: str = "mcq",
     prune_text: bool = False,
     prune_gaze: bool = False,
     prune_random: bool = False,
@@ -834,7 +921,7 @@ def main(
 
     # ── Warmup (single forward, not timed, uses first sample) ────────────────
     print("\nWarming up...")
-    warmup_inputs, _, warmup_frame_gaze, _ = build_inputs(processor, samples[0], n_frames)
+    warmup_inputs, _, warmup_frame_gaze, _ = build_inputs(processor, samples[0], n_frames, task=task)
     generation_kwargs_warmup = build_pruning_kwargs(
         prune_text, prune_gaze, prune_random, prune_layers, prune_ratio, prune_alpha
     )
@@ -876,6 +963,7 @@ def main(
             config_tag=config_tag,
             device=device,
             seed=seed,
+            task=task,
             save_viz=save_viz or (num_samples == 1),
             viz_suffix="",
         )
@@ -915,6 +1003,10 @@ if __name__ == "__main__":
     parser.add_argument("--qa-types",    nargs="+",  default=None,
                         choices=["causal", "spatial", "temporal"],
                         help="QA types to include (default: all).")
+    parser.add_argument("--task",        type=str,   default="mcq",
+                        choices=["mcq", "caption"],
+                        help="mcq = multiple-choice (graded by letter match);  "
+                             "caption = open-ended description (scored offline by BERTScore).")
 
     # ── Pruning ───────────────────────────────────────────────────────────────
     parser.add_argument("--prune-text",   action="store_true", help="Text-rater pruning.")
@@ -946,6 +1038,7 @@ if __name__ == "__main__":
         num_samples=args.num_samples,
         seed=args.seed,
         qa_types=args.qa_types,
+        task=args.task,
         prune_text=args.prune_text,
         prune_gaze=args.prune_gaze,
         prune_random=args.prune_random,

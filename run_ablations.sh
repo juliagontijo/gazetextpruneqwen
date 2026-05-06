@@ -18,7 +18,7 @@
 set -e
 cd "$(dirname "$0")"
 
-RESULTS_CSV="results/ablations.csv"
+RESULTS_CSV="results/ablations2.csv"
 N=30        # samples per condition (covers all 30 clips = 90 QA rows / 3 types)
 SEED=42
 FRAMES=4

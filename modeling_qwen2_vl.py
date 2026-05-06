@@ -45,8 +45,14 @@ from ...utils import (
     auto_docstring,
     can_return_tuple,
     logging,
-    torch_compilable_check,
 )
+
+try:
+    from ...utils import torch_compilable_check
+except ImportError:
+    def torch_compilable_check(condition, message=""):
+        if not condition:
+            raise ValueError(message)
 from ...utils.generic import (
     is_flash_attention_requested,
     maybe_autocast,

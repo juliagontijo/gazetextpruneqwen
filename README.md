@@ -1,244 +1,288 @@
-# Gaze-Text Prune on Qwen2-VL
+# Gaze + Text Visual Token Pruning for Qwen2-VL
 
-Forked Qwen2-VL profiling workspace for gaze/text pruning experiments on EgoGazeVQA.
+This project investigates whether pruning visual tokens in a multimodal LLM — guided by human gaze and/or text relevance — can reduce decoding cost without hurting accuracy on egocentric video QA.
 
-This branch is a **snapshot of the forked-model path**, including:
-- the forked Qwen model implementation in `modeling_qwen2_vl.py`
-- the forked profiler in `profile_forked_model.py`
-- frame preprocessing in `preprocess_frames.py`
-- lightweight dataset metadata/narration files
-- saved profiling logs and pruning visualizations
+The model is **Qwen2-VL-2B-Instruct**, with a forked decoder that supports on-the-fly visual token pruning at specified transformer layers. The benchmark is **EgoGazeVQA**, an egocentric gaze-guided VQA dataset built on Ego4D, EgoExo, and EGTEA clips.
 
-It is an **experimental branch**, not a polished release.
+---
 
-## What Is In This Repo
+## How It Works
 
-- `profile_forked_model.py`
-  - loads the local forked `Qwen2VLForConditionalGeneration`
-  - profiles `vision_encoder`, `decoder_only`, and `full_run` separately
-  - logs timings, inputs, outputs, predicted answer, and pruning config to `profile_forked_log.md`
-- `modeling_qwen2_vl.py`
-  - local Qwen2-VL fork with in-model pruning arguments
-- `preprocess_frames.py`
-  - builds frame folders plus `gaze.json` files from EgoGazeVQA narrations
-- `viz/`
-  - saved pruning visualizations from forked-model runs
-- `data/EgoGazeVQA_full/`
-  - lightweight metadata files included in this branch:
-    - `metadata.csv`
-    - `ego4d.json`
-    - `egoexo.json`
-    - `egtea.json`
-    - dataset README / `.gitattributes`
+### The Core Idea
 
-## What Is Not Included
+Qwen2-VL encodes video frames into a large number of visual tokens fed into the LLM decoder alongside text tokens. Most of those visual tokens are redundant for any given question. This project prunes the least useful ones at a chosen decoder layer, shrinking the KV cache and speeding up all subsequent decoding steps.
 
-The full `data/` directory on the local machine is about **25 GB**, so the complete video payload and generated frame cache are **not** pushed in this branch.
+Pruning happens **once during the prefill pass**, before any tokens are generated. After pruning, the decoder operates on a shorter sequence for the rest of generation.
 
-That means this branch includes:
-- metadata
-- narration/gaze JSON files
+### Pruning Methods
 
-but not:
-- the full downloaded dataset videos
-- the large pre-extracted frame cache
+Three signals can score visual tokens, alone or combined:
 
-## Environment Setup
+**Text-rater (`--prune-text`)**
+Inspired by SparseVLM. After the prefill pass through the pruning layer, a subset of text tokens is selected as "raters" based on how much attention they pay to visual tokens. Each visual token is then scored by how strongly those raters attend to it — tokens that text pays attention to are kept.
 
-This project was run in a local Python 3.11 virtual environment named `llmgazepp`.
+**Gaze-guided (`--prune-gaze`)**
+A 2D Gaussian heatmap is placed at the annotated gaze fixation point for each frame. Visual tokens closer to where the person was looking get higher scores. This is computed before any model forward pass and passed in as a `gaze_scores` tensor.
 
-### 1. Create the environment
+**Combined (`--prune-text --prune-gaze`)**
+A weighted sum: `alpha * text_score + (1 - alpha) * gaze_score`. Alpha controls the balance (1 = pure text, 0 = pure gaze).
 
-```bash
-python3 -m venv llmgazepp
-source llmgazepp/bin/activate
-python -m pip install --upgrade pip
+**Random (`--prune-random`)**
+Baseline: tokens kept by uniform random scores. Reproducible per sample via a fixed seed. Mutually exclusive with the above two.
+
+### Where Pruning Happens in the Model
+
+The forked model is in [`modeling_qwen2_vl.py`](modeling_qwen2_vl.py). The key logic is in `Qwen2VLTextModel.forward()`:
+
+1. The prefill runs normally up to the pruning layer
+2. At the pruning layer, a standard forward pass runs first to get updated hidden states
+3. Text-rater scores and/or gaze scores are computed from those hidden states
+4. A boolean `visual_keep_mask` is built by top-K selection over the combined scores
+5. Visual tokens failing the mask are removed from `hidden_states`, `position_ids`, and the attention mask
+6. Remaining layers see only the kept tokens
+7. During autoregressive decoding, the shorter KV cache is used — this is where the speedup accrues
+
+---
+
+## Dataset: EgoGazeVQA
+
+**Source:** `taiyi09/EgoGazeVQA` on HuggingFace (gated — requires access request)
+
+**Full size:** 1,761 QA rows across three source datasets:
+
+| Dataset | Unique video IDs | Clips per video | QA rows |
+|---------|-----------------|-----------------|---------|
+| Ego4D   | 31              | ~10 (30 QA rows each, balanced 10×3) | 581 |
+| EgoExo  | 161             | ~6 rows each    | 695 |
+| EGTEA   | 82              | varies          | 485 |
+
+Each clip has **3 QA rows** — one per question type:
+- **Causal** — why did the person do X?
+- **Spatial** — where is object X relative to Y?
+- **Temporal** — what happened before/after X?
+
+Each QA row is a 5-option multiple choice question (A–E).
+
+**Gaze data:** Every clip has per-frame gaze fixation coordinates (`gaze_x`, `gaze_y` in [0,1]) and narration text sourced from `ego4d.json` / `egoexo.json`. These are written to per-clip `gaze.json` files during preprocessing.
+
+### Why Ego4D for experiments
+
+Each Ego4D video ID provides exactly 30 QA rows (10 per question type) — perfectly balanced. Downloading one video ID gives you a complete, balanced evaluation set. EgoExo only gives 6 rows per video ID, requiring many more downloads to reach the same coverage.
+
+### Local Data Layout
+
 ```
-
-### 2. Install Python dependencies
-
-```bash
-pip install torch transformers accelerate qwen-vl-utils opencv-python pillow matplotlib numpy datasets huggingface_hub
-```
-
-Notes:
-- this workspace was run on Apple Silicon with `mps`
-- `matplotlib` is only needed if you want saved visualizations
-- `accelerate` is required because the model is loaded with `device_map`
-
-## Dataset
-
-Dataset source:
-- [taiyi09/EgoGazeVQA on Hugging Face](https://huggingface.co/datasets/taiyi09/EgoGazeVQA)
-
-Important:
-- the dataset is **gated**
-- you must log in to Hugging Face and accept the dataset conditions before downloading
-
-### 1. Log in
-
-```bash
-huggingface-cli login
-```
-
-### 2. Download the lightweight metadata/narration files
-
-These are already included in this branch, but this is how they were obtained:
-
-```bash
-huggingface-cli download taiyi09/EgoGazeVQA \
-  metadata.csv ego4d.json egoexo.json egtea.json README.md .gitattributes \
-  --repo-type dataset \
-  --local-dir data/EgoGazeVQA_full
-```
-
-### 3. Download the videos
-
-Download only the subsets you want. Example:
-
-```bash
-huggingface-cli download taiyi09/EgoGazeVQA ego4d \
-  --repo-type dataset \
-  --local-dir data/EgoGazeVQA_full
-```
-
-You can repeat that for:
-- `egoexo`
-- `egtea`
-
-Expected local structure:
-
-```text
 data/EgoGazeVQA_full/
-├── metadata.csv
-├── ego4d.json
-├── egoexo.json
-├── egtea.json
-├── ego4d/
-├── egoexo/
-└── egtea/
+├── metadata.csv              # all 1761 QA rows
+├── ego4d.json                # narrations + gaze for all Ego4D videos
+├── egoexo.json               # narrations + gaze for all EgoExo videos
+├── ego4d/                    # downloaded video clips
+│   └── <video_id>/
+│       └── <start>_<end>.mp4
+└── frames/                   # extracted by preprocess_frames.py
+    └── ego4d/
+        └── <video_id>/
+            └── <start>_<end>/
+                ├── <frame_number>.jpg
+                └── gaze.json
 ```
 
-## Metadata Note
+---
 
-`metadata.csv` is included in this repo because it was needed to reproduce the runs, and it was not present in your earlier GitHub snapshot. This branch keeps the lightweight dataset metadata together with the profiling code so the sample selection and evaluation flow are reproducible.
+## Setup
 
-## Frame Preprocessing
-
-Before profiling, build the gaze-aligned frame cache.
-
-Example for Ego4D:
+### 1. Create the conda environment
 
 ```bash
-python preprocess_frames.py --dataset ego4d --force
+conda env create -f environment.yml
+conda activate gazeprune
 ```
 
-This creates frame folders plus `gaze.json` files under:
-
-```text
-data/EgoGazeVQA_full/frames/ego4d/
-```
-
-You can do the same for the other subsets:
+Or manually:
 
 ```bash
-python preprocess_frames.py --dataset egoexo --force
-python preprocess_frames.py --dataset egtea --force
+conda create -n gazeprune python=3.11 -y
+pip install torch torchvision "transformers>=4.51.0" \
+    huggingface_hub datasets qwen-vl-utils opencv-python \
+    Pillow numpy matplotlib tqdm bert-score
 ```
 
-## Running The Forked Profiler
+### 2. Log in to HuggingFace
 
-Baseline:
+The dataset is gated. First request access at `huggingface.co/datasets/taiyi09/EgoGazeVQA`, then create a token at `huggingface.co/settings/tokens` with **"Read access to public gated repositories"** enabled.
 
 ```bash
-python profile_forked_model.py --frames 4
+hf auth login
 ```
 
-This:
-1. loads the local forked model from `modeling_qwen2_vl.py`
-2. loads one sample from `metadata.csv`
-3. prefers preprocessed frames if they exist
-4. runs a warmup generate
-5. profiles:
-   - `vision_encoder`
-   - `decoder_only`
-   - `full_run`
-6. logs the result to `profile_forked_log.md`
+---
 
-## Pruning Commands
+## Data Pipeline
 
-### 1. Gaze-only pruning
+### Step 1 — Download videos
 
 ```bash
-python profile_forked_model.py --frames 4 --prune-gaze --prune-layers 10 --prune-ratio 0.5
+# Default: 3 Ego4D video IDs = 30 unique clips = 90 QA rows (30 per question type)
+python download_ego4d.py
+
+# Or specify different video IDs from metadata.csv
+python download_ego4d.py --video-ids dafc891e-05f0-4734-88c6-1f818ac67a23 566ad4e5-1ce4-4679-9d19-ef63072c848c
 ```
 
-Meaning:
-- use 4 sampled frames
-- compute gaze scores from the preprocessed `gaze.json`
-- prune inside the forked model at decoder layer `10`
-- keep `50%` of visual tokens at that pruning layer
+Downloads go to `data/EgoGazeVQA_full/ego4d/<video_id>/<clip>.mp4`. Already-present clips are skipped so the script is safe to re-run.
 
-### 2. Text-only pruning
+### Step 2 — Extract frames and gaze
 
 ```bash
-python profile_forked_model.py --frames 4 --prune-text --prune-layers 10 --prune-ratio 0.5
+python preprocess_frames.py --dataset ego4d
 ```
 
-Meaning:
-- use SparseVLM-style text-guided pruning
-- prune at decoder layer `10`
-- keep `50%` of visual tokens
+For each clip this script:
+1. Finds narration timestamps that fall within the clip's frame range
+2. Extracts those exact frames as JPEGs
+3. Writes a `gaze.json` with per-frame gaze coordinates and narration text
 
-### 3. Combined gaze + text pruning
+Output: `data/EgoGazeVQA_full/frames/ego4d/<video_id>/<clip_stem>/`
+
+Use `--force` to re-extract even if already done.
+
+---
+
+## Running Experiments
+
+### Single sample (debug / visualisation)
 
 ```bash
-python profile_forked_model.py --frames 4 --prune-gaze --prune-text --prune-layers 10 --prune-ratio 0.5 --prune-alpha 0.5
+# Baseline — no pruning
+python profile_forked_model.py
+
+# Text-rater pruning at layer 10, keep 50% of visual tokens
+python profile_forked_model.py --prune-text --prune-layers 10 --prune-ratio 0.5
+
+# Gaze-guided pruning
+python profile_forked_model.py --prune-gaze --prune-layers 10 --prune-ratio 0.5
+
+# Combined (alpha=0.5 = equal weight between text and gaze)
+python profile_forked_model.py --prune-text --prune-gaze --prune-alpha 0.5 \
+    --prune-layers 10 --prune-ratio 0.5
+
+# Caption task instead of MCQ
+python profile_forked_model.py --task caption --prune-text --prune-layers 10 --prune-ratio 0.5
 ```
 
-Meaning:
-- enable both gaze and text pruning
-- prune at decoder layer `10`
-- keep `50%` of visual tokens
-- fuse gaze and text scores with `prune_alpha=0.5`
+Single-sample runs save a pruning visualisation PNG to `viz/` and a markdown log entry to `profile_forked_log.md`.
 
-Interpretation of `prune_alpha` in this branch:
-- `0.0` means rely more on gaze
-- `1.0` means rely more on text
-- `0.5` gives equal weight
-
-## Current Snapshot Status
-
-This branch is meant to preserve the current experimental state.
-
-What is working:
-- baseline forked-model profiling run
-- separate timing for `vision_encoder`, `decoder_only`, and `full_run`
-- logging to `profile_forked_log.md`
-- saved pruning visualizations under `viz/`
-
-What is still experimental:
-- in-model pruning with cached decode, especially text-guided and combined paths
-- layer-specific attention-mask/cache bookkeeping after pruning
-
-If a prune-enabled run fails, that is part of the current saved state of this branch.
-
-## Outputs
-
-- profiling log:
-  - `profile_forked_log.md`
-- pruning visualizations:
-  - `viz/`
-
-## Example Workflow
+### Full ablation sweep
 
 ```bash
-source llmgazepp/bin/activate
+bash run_ablations.sh
+```
 
-python preprocess_frames.py --dataset ego4d --force
+Runs in 4 sequential steps. After each step, inspect `results/ablations.csv`, update the `BEST_*` variable at the top of the next step block in `run_ablations.sh`, and continue.
 
-python profile_forked_model.py --frames 4
-python profile_forked_model.py --frames 4 --prune-gaze --prune-layers 10 --prune-ratio 0.5
-python profile_forked_model.py --frames 4 --prune-text --prune-layers 10 --prune-ratio 0.5
-python profile_forked_model.py --frames 4 --prune-gaze --prune-text --prune-layers 10 --prune-ratio 0.5 --prune-alpha 0.5
+| Step | Variable swept | Fixed | Measures |
+|------|---------------|-------|----------|
+| 1 — Layer | layer ∈ {5, 10, 20} | text-only, ratio=0.5 | accuracy + decode speed |
+| 2 — Method | no-prune / random / text / gaze / combined | best layer, ratio=0.5 | accuracy |
+| 3 — Ratio | ratio ∈ {0.10, 0.25, 0.50, 0.75, 0.90} | best layer + method | accuracy + decode speed |
+| 4 — Alpha | α ∈ {0.0, 0.25, 0.50, 0.75, 1.0} | best layer + ratio | accuracy (combined only) |
+
+All conditions use **N=30 samples, seed=42, 4 frames**. Results are appended to `results/ablations.csv` after each sample — safe to interrupt and resume.
+
+### Key flags for `profile_forked_model.py`
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--frames` | 4 | Frames sampled per clip |
+| `--num-samples` | 1 | Number of clips to evaluate |
+| `--seed` | 42 | Shuffle seed for sample selection |
+| `--qa-types` | all | Filter: `causal`, `spatial`, `temporal` |
+| `--task` | `mcq` | `mcq` (letter match) or `caption` (BERTScore, scored offline) |
+| `--prune-text` | off | Enable text-rater pruning |
+| `--prune-gaze` | off | Enable gaze-guided pruning |
+| `--prune-random` | off | Random pruning baseline (mutually exclusive with text/gaze) |
+| `--prune-layers` | [27] | Decoder layer index to prune at |
+| `--prune-ratio` | 0.5 | Fraction of visual tokens to keep |
+| `--prune-alpha` | 0.5 | Weight of text vs gaze (1 = pure text, 0 = pure gaze) |
+| `--config-tag` | auto | Label written to the CSV for this condition |
+| `--results-csv` | none | Path to append per-sample CSV rows |
+| `--save-viz` | off | Save pruning overlay PNG for every sample |
+
+---
+
+## Output Files
+
+### `results/ablations.csv`
+
+One row per sample per condition. Key columns:
+
+| Column | Description |
+|--------|-------------|
+| `config_tag` | Condition label, e.g. `text_l10_r0.5` |
+| `prune_text/gaze/random` | Which method was active (0/1) |
+| `prune_layer` | Layer index where pruning happened |
+| `prune_ratio` | Fraction of tokens kept |
+| `decode_s` | Total decode wall time in seconds |
+| `decode_ms_per_token` | Decode speed |
+| `correct` | 1/0 for MCQ; BERTScore F1 for caption (filled offline by `score_captions.py`) |
+
+### `viz/`
+
+PNG files with a 3-panel pruning visualisation per sample:
+- Row 1: original frames
+- Row 2: frames overlaid with token score heatmap (RdYlGn, green = kept)
+- Row 3: text-rater scores per token (bar chart, green bars = selected rater tokens)
+
+### `profile_forked_log.md`
+
+Markdown log with per-run timing table, model output, and pruning config for single-sample runs.
+
+---
+
+## Offline Caption Scoring
+
+Caption-task runs leave the `correct` column empty. Score them offline:
+
+```bash
+python score_captions.py --csv results/ablations.csv
+
+# Score only a specific condition
+python score_captions.py --csv results/ablations.csv --config-tag caption_text_l10_r0.5
+
+# Rescale F1 so random text ≈ 0 (more interpretable)
+python score_captions.py --csv results/ablations.csv --rescale
+```
+
+Uses `microsoft/deberta-xlarge-mnli` as the BERTScore backbone. The script only scores rows where `correct` is empty, so it is safe to run repeatedly on a mixed MCQ + caption CSV.
+
+---
+
+## Gaze Visualisation
+
+Inspect gaze heatmaps overlaid on frames without running any model:
+
+```bash
+python visualize_gaze.py --frames 4 --sigma 0.1
+python visualize_gaze.py --frames 4 --sigma 0.05 --save   # saves to gaze_vis.png
+```
+
+`sigma` controls the Gaussian width around the gaze fixation point (as a fraction of the token grid dimensions).
+
+---
+
+## Repository Structure
+
+```
+.
+├── modeling_qwen2_vl.py      # forked Qwen2-VL decoder with visual token pruning
+├── profile_forked_model.py   # main evaluation + profiling script
+├── run_ablations.sh          # 4-step ablation sweep
+├── download_ego4d.py         # download Ego4D clips from HuggingFace
+├── preprocess_frames.py      # extract frames + gaze.json from raw clips
+├── score_captions.py         # offline BERTScore for caption-task rows
+├── visualize_gaze.py         # gaze heatmap visualisation tool
+├── environment.yml           # conda environment spec
+├── data/EgoGazeVQA_full/     # dataset (videos + frames + metadata)
+├── results/                  # ablations.csv written here
+└── viz/                      # pruning visualisation PNGs
 ```

@@ -1,0 +1,21 @@
+name: gazeprune
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+    - torch
+    - torchvision
+    - transformers>=4.51.0
+    - huggingface_hub
+    - datasets
+    - qwen-vl-utils
+    - opencv-python
+    - Pillow
+    - numpy
+    - matplotlib
+    - tqdm
+    - bert-score

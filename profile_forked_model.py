@@ -65,6 +65,9 @@ CSV_COLUMNS = [
     "correct_answer",
     "predicted_answer",
     "correct",
+    "cot_text",
+    "narration_gt",
+    "cot_coverage",
 ]
 
 
@@ -671,16 +674,19 @@ def run_sample(
             )
 
     decoder_output  = decode_output(processor, inputs, generated_ids)
+    narration_gt = build_caption_ground_truth(frame_gaze, file_name=row["file_name"])
     if task == "caption":
-        # Store full output as prediction; ground truth = concatenated narrations.
-        # Quality scoring (BERTScore) is computed offline by score_captions.py.
         predicted_answer = decoder_output.strip().replace("\n", " ")
-        correct_answer   = build_caption_ground_truth(frame_gaze, file_name=row["file_name"])
-        is_correct       = None  # filled in offline
+        correct_answer   = narration_gt
+        is_correct       = None  # filled offline by score_captions.py
+        cot_text         = ""    # caption task has no CoT format
     else:
         predicted_answer = parse_answer(decoder_output)
         correct_answer   = row["correct_answer"].strip()
         is_correct       = int(predicted_answer == correct_answer) if predicted_answer else None
+        # Extract chain-of-thought: everything before the final "Answer: X"
+        answer_pos = decoder_output.rfind("Answer:")
+        cot_text = decoder_output[:answer_pos].strip() if answer_pos != -1 else decoder_output.strip()
 
     tokens_generated     = generated_ids.shape[1] - inputs.input_ids.shape[1]
     decode_s             = results["decode"]["time_s"]
@@ -737,6 +743,9 @@ def run_sample(
         "correct_answer":        correct_answer,
         "predicted_answer":      predicted_answer or "",
         "correct":               is_correct if is_correct is not None else "",
+        "cot_text":              cot_text.replace("\n", " "),
+        "narration_gt":          narration_gt.replace("\n", " "),
+        "cot_coverage":          "",  # filled offline by score_cot.py
     }
     # stash for markdown (not written to CSV)
     csv_row["_decoder_output"]  = decoder_output

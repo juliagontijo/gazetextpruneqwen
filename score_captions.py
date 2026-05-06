@@ -23,6 +23,7 @@ CSV_COLUMNS = [
     "prune_text", "prune_gaze", "prune_random", "prune_alpha", "prune_ratio", "prune_layer",
     "input_preprocessing_s", "vision_encoder_s", "decode_s", "tokens_generated",
     "decode_ms_per_token", "correct_answer", "predicted_answer", "correct",
+    "cot_text", "narration_gt", "cot_coverage",
 ]
 
 

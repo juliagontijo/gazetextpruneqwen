@@ -22,7 +22,7 @@ RESULTS_CSV="results/ablations.csv"
 N=30        # samples per condition (covers all 30 clips = 90 QA rows / 3 types)
 SEED=42
 FRAMES=4
-PY="conda run -n gazeprune python"
+PY="python"
 
 mkdir -p results
 

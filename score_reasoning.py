@@ -1,10 +1,9 @@
 """
 Offline LLM-as-Judge reasoning scorer for MCQ rows in ablations.csv.
 
-For each MCQ row the model produces a chain-of-thought (CoT) before writing
-"Answer: X".  This script asks Claude to evaluate that reasoning against the
-ground-truth narration and the question, using a per-QA-type rubric with 5
-binary criteria (0 or 1 each).
+Uses Qwen2.5-7B-Instruct locally (no API key needed) to evaluate each row's
+chain-of-thought against the ground-truth narration using a per-QA-type rubric
+with 5 binary criteria (0 or 1 each).
 
 Two columns are written:
   reasoning_score       — mean of the 5 binary scores (0.0 – 1.0)
@@ -20,20 +19,20 @@ temporal — event_identification · sequence_description · temporal_inference 
            logical_consistency · visual_grounding
 
 Usage:
-    pip install anthropic
     python score_reasoning.py --csv results/ablations.csv
     python score_reasoning.py --csv results/ablations.csv --config-tag text_l10_r0.5
     python score_reasoning.py --csv results/ablations.csv --dry-run
+    python score_reasoning.py --csv results/ablations.csv --model Qwen/Qwen2.5-3B-Instruct
 """
 import argparse
 import csv
 import json
-import os
 import sys
 import time
 from pathlib import Path
 
-import anthropic
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 # ── Column definitions ──────────────────────────────────────────────────────
 CSV_COLUMNS = [
@@ -44,7 +43,7 @@ CSV_COLUMNS = [
     "cot_text", "narration_gt", "cot_coverage", "reasoning_score", "reasoning_explanation",
 ]
 
-MODEL = "claude-opus-4-7"
+DEFAULT_MODEL = "Qwen/Qwen2.5-7B-Instruct"
 
 # ── Rubrics ──────────────────────────────────────────────────────────────────
 RUBRICS = {
@@ -96,8 +95,7 @@ Rules:
 - Output ONLY a JSON object. Each key is a criterion name; each value is {"score": 0|1, "reason": "..."}. No other text."""
 
 
-def build_user_prompt(qa_type: str, question: str, correct_answer: str,
-                      narration_gt: str, cot_text: str) -> str:
+def build_user_prompt(qa_type: str, question: str, narration_gt: str, cot_text: str) -> str:
     rubric = RUBRICS[qa_type]
     criteria_lines = "\n".join(
         f"- {name}: {desc}"
@@ -124,7 +122,7 @@ Each value must be an object: {{"score": 0 or 1, "reason": "one-sentence explana
 
 def is_scorable(row: dict) -> bool:
     return (
-        row.get("reasoning_score", "") == ""      # not yet scored
+        row.get("reasoning_score", "") == ""
         and len(row.get("cot_text", "").strip()) > 10
         and len(row.get("narration_gt", "").strip()) > 10
         and row.get("qa_type", "") in RUBRICS
@@ -132,27 +130,28 @@ def is_scorable(row: dict) -> bool:
 
 
 def parse_response(response_text: str, qa_type: str) -> tuple[float, str] | tuple[None, None]:
-    """Parse JSON from Claude's response.
-
-    Returns (mean_score, explanation_json_str) or (None, None) on failure.
-    explanation_json_str is a compact JSON mapping criterion -> {score, reason}.
-    """
+    """Parse JSON from model response; return (mean_score, explanation_json) or (None, None)."""
     try:
         text = response_text.strip()
+        # Strip markdown code fences if present
         if text.startswith("```"):
             text = text.split("```")[1]
             if text.startswith("json"):
                 text = text[4:]
-        data = json.loads(text.strip())
-        criteria_names = [name for name, _ in RUBRICS[qa_type]["criteria"]]
+        # Find the first { ... } block in case of preamble
+        start = text.find("{")
+        end = text.rfind("}") + 1
+        if start == -1 or end == 0:
+            return None, None
+        data = json.loads(text[start:end])
 
+        criteria_names = [name for name, _ in RUBRICS[qa_type]["criteria"]]
         scores = []
         explanation: dict[str, dict] = {}
         for name in criteria_names:
             if name not in data:
                 continue
             entry = data[name]
-            # Support both {"score": 1, "reason": "..."} and bare 0/1
             if isinstance(entry, dict):
                 s = int(entry.get("score", 0))
                 reason = str(entry.get("reason", "")).strip()
@@ -172,36 +171,54 @@ def parse_response(response_text: str, qa_type: str) -> tuple[float, str] | tupl
         return None, None
 
 
-def score_row(client: anthropic.Anthropic, row: dict, dry_run: bool = False) -> tuple[float, str] | tuple[None, None]:
+def load_model(model_id: str):
+    print(f"Loading judge model: {model_id} ...")
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    model = AutoModelForCausalLM.from_pretrained(
+        model_id,
+        torch_dtype=torch.float16 if device == "cuda" else torch.float32,
+        device_map="auto",
+    )
+    model.eval()
+    print(f"  Loaded on {device}.\n")
+    return model, tokenizer
+
+
+def score_row(model, tokenizer, row: dict) -> tuple[float, str] | tuple[None, None]:
     qa_type = row["qa_type"]
     user_prompt = build_user_prompt(
         qa_type=qa_type,
         question=row.get("correct_answer", ""),
-        correct_answer=row.get("correct_answer", ""),
         narration_gt=row["narration_gt"],
         cot_text=row["cot_text"],
     )
 
-    if dry_run:
-        print(f"    [dry-run] would score {qa_type} row (cot len={len(row['cot_text'])})")
-        return None, None
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user",   "content": user_prompt},
+    ]
 
-    response = client.messages.create(
-        model=MODEL,
-        max_tokens=512,
-        thinking={"type": "adaptive"},
-        system=[
-            {
-                "type": "text",
-                "text": SYSTEM_PROMPT,
-                "cache_control": {"type": "ephemeral"},
-            }
-        ],
-        messages=[{"role": "user", "content": user_prompt}],
+    text = tokenizer.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=True,
     )
+    inputs = tokenizer(text, return_tensors="pt").to(model.device)
 
-    text_blocks = [b.text for b in response.content if b.type == "text"]
-    response_text = " ".join(text_blocks)
+    with torch.no_grad():
+        output_ids = model.generate(
+            **inputs,
+            max_new_tokens=512,
+            do_sample=False,
+            temperature=None,
+            top_p=None,
+            pad_token_id=tokenizer.eos_token_id,
+        )
+
+    # Decode only the newly generated tokens
+    new_tokens = output_ids[0][inputs["input_ids"].shape[1]:]
+    response_text = tokenizer.decode(new_tokens, skip_special_tokens=True)
     return parse_response(response_text, qa_type)
 
 
@@ -232,18 +249,17 @@ def summarise(targets: list[dict], scores: list[float]) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--csv", type=Path, required=True)
+    ap.add_argument("--model", type=str, default=DEFAULT_MODEL,
+                    help=f"HuggingFace judge model (default: {DEFAULT_MODEL})")
     ap.add_argument("--config-tag", type=str, default=None,
                     help="Only score rows whose config_tag contains this substring.")
     ap.add_argument("--dry-run", action="store_true",
-                    help="Print what would be scored without calling the API.")
-    ap.add_argument("--delay", type=float, default=0.5,
-                    help="Seconds to sleep between API calls (rate-limit buffer).")
+                    help="Print what would be scored without running inference.")
     args = ap.parse_args()
 
     with open(args.csv, newline="") as f:
         rows = list(csv.DictReader(f))
 
-    # Ensure new columns exist in all rows
     for r in rows:
         r.setdefault("reasoning_score", "")
         r.setdefault("reasoning_explanation", "")
@@ -260,18 +276,14 @@ def main() -> None:
         print("No scorable rows found (already scored, missing CoT/narration, or unknown qa_type).")
         return
 
-    print(f"Scoring {len(targets)} rows with LLM-as-Judge ({MODEL})...")
+    print(f"Scoring {len(targets)} rows with LLM-as-Judge ({args.model})...")
+
     if args.dry_run:
         for r in targets:
-            score_row(None, r, dry_run=True)
+            print(f"  [dry-run] {r['config_tag']}  qa_type={r['qa_type']}  cot_len={len(r['cot_text'])}")
         return
 
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        print("Error: ANTHROPIC_API_KEY not set.", file=sys.stderr)
-        sys.exit(1)
-
-    client = anthropic.Anthropic(api_key=api_key)
+    model, tokenizer = load_model(args.model)
 
     completed_scores: list[float] = []
     failed = 0
@@ -281,7 +293,7 @@ def main() -> None:
         qt = r.get("qa_type", "?")
         print(f"  [{i+1}/{len(targets)}] {tag}  qa_type={qt} ...", end=" ", flush=True)
         try:
-            score, explanation = score_row(client, r)
+            score, explanation = score_row(model, tokenizer, r)
             if score is None:
                 print("PARSE ERROR — skipping")
                 failed += 1
@@ -291,24 +303,21 @@ def main() -> None:
                 r["reasoning_explanation"] = explanation or ""
                 completed_scores.append(score)
                 print(f"{score:.4f}")
-        except anthropic.APIError as e:
-            print(f"API ERROR: {e} — skipping")
+        except Exception as e:
+            print(f"ERROR: {e} — skipping")
             failed += 1
             completed_scores.append(float("nan"))
 
-        # Write incrementally after every row so progress survives interruption
+        # Write incrementally so progress survives interruption
         with open(args.csv, "w", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=CSV_COLUMNS)
             writer.writeheader()
             for row in rows:
                 writer.writerow({k: row.get(k, "") for k in CSV_COLUMNS})
 
-        if i < len(targets) - 1:
-            time.sleep(args.delay)
-
     valid_scores = [s for s in completed_scores if s == s]  # filter NaN
     if failed:
-        print(f"\n{failed} rows failed (parse error or API error).")
+        print(f"\n{failed} rows failed (parse error or model error).")
 
     if valid_scores:
         summarise(

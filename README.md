@@ -279,17 +279,19 @@ Writes the recall score to `cot_coverage`. Called automatically by `run_ablation
 
 ### Reasoning quality (`score_reasoning.py`)
 
-LLM-as-Judge evaluation using Claude (`claude-opus-4-7`) with per-QA-type rubrics. Requires `ANTHROPIC_API_KEY` in the environment.
+LLM-as-Judge evaluation using `Qwen2.5-7B-Instruct` running locally — no API key needed, runs on the same GPU as the ablations.
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...
 python score_reasoning.py --csv results/ablations.csv
 
 # Score only a specific condition
 python score_reasoning.py --csv results/ablations.csv --config-tag text_l10_r0.5
 
-# Dry-run to see what would be scored without calling the API
+# Dry-run to see what would be scored without running inference
 python score_reasoning.py --csv results/ablations.csv --dry-run
+
+# Use a smaller model if VRAM is tight
+python score_reasoning.py --csv results/ablations.csv --model Qwen/Qwen2.5-3B-Instruct
 ```
 
 Each MCQ row's CoT is evaluated on 5 binary criteria specific to the question type:

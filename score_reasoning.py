@@ -124,17 +124,20 @@ Each value must be an object: {{"score": 0 or 1, "reason": "one-sentence explana
 
 def is_scorable(row: dict) -> bool:
     return (
-        row.get("reasoning_score", "") == ""
+        row.get("reasoning_score", "") == ""      # not yet scored
         and len(row.get("cot_text", "").strip()) > 10
         and len(row.get("narration_gt", "").strip()) > 10
         and row.get("qa_type", "") in RUBRICS
     )
 
 
-def parse_scores(response_text: str, qa_type: str) -> float | None:
-    """Parse JSON from Claude's response; return mean score or None on failure."""
+def parse_response(response_text: str, qa_type: str) -> tuple[float, str] | tuple[None, None]:
+    """Parse JSON from Claude's response.
+
+    Returns (mean_score, explanation_json_str) or (None, None) on failure.
+    explanation_json_str is a compact JSON mapping criterion -> {score, reason}.
+    """
     try:
-        # Strip markdown code fences if present
         text = response_text.strip()
         if text.startswith("```"):
             text = text.split("```")[1]
@@ -142,19 +145,38 @@ def parse_scores(response_text: str, qa_type: str) -> float | None:
                 text = text[4:]
         data = json.loads(text.strip())
         criteria_names = [name for name, _ in RUBRICS[qa_type]["criteria"]]
-        scores = [int(data[k]) for k in criteria_names if k in data]
+
+        scores = []
+        explanation: dict[str, dict] = {}
+        for name in criteria_names:
+            if name not in data:
+                continue
+            entry = data[name]
+            # Support both {"score": 1, "reason": "..."} and bare 0/1
+            if isinstance(entry, dict):
+                s = int(entry.get("score", 0))
+                reason = str(entry.get("reason", "")).strip()
+            else:
+                s = int(entry)
+                reason = ""
+            scores.append(s)
+            explanation[name] = {"score": s, "reason": reason}
+
         if not scores:
-            return None
-        return sum(scores) / len(scores)
+            return None, None
+
+        mean_score = sum(scores) / len(scores)
+        explanation_str = json.dumps(explanation, ensure_ascii=False, separators=(",", ":"))
+        return mean_score, explanation_str
     except Exception:
-        return None
+        return None, None
 
 
-def score_row(client: anthropic.Anthropic, row: dict, dry_run: bool = False) -> float | None:
+def score_row(client: anthropic.Anthropic, row: dict, dry_run: bool = False) -> tuple[float, str] | tuple[None, None]:
     qa_type = row["qa_type"]
     user_prompt = build_user_prompt(
         qa_type=qa_type,
-        question=row.get("correct_answer", ""),  # correct_answer holds the full question+answer
+        question=row.get("correct_answer", ""),
         correct_answer=row.get("correct_answer", ""),
         narration_gt=row["narration_gt"],
         cot_text=row["cot_text"],
@@ -162,11 +184,11 @@ def score_row(client: anthropic.Anthropic, row: dict, dry_run: bool = False) -> 
 
     if dry_run:
         print(f"    [dry-run] would score {qa_type} row (cot len={len(row['cot_text'])})")
-        return None
+        return None, None
 
     response = client.messages.create(
         model=MODEL,
-        max_tokens=256,
+        max_tokens=512,
         thinking={"type": "adaptive"},
         system=[
             {
@@ -178,10 +200,9 @@ def score_row(client: anthropic.Anthropic, row: dict, dry_run: bool = False) -> 
         messages=[{"role": "user", "content": user_prompt}],
     )
 
-    # Extract text from response (skip thinking blocks)
     text_blocks = [b.text for b in response.content if b.type == "text"]
     response_text = " ".join(text_blocks)
-    return parse_scores(response_text, qa_type)
+    return parse_response(response_text, qa_type)
 
 
 def summarise(targets: list[dict], scores: list[float]) -> None:
@@ -222,9 +243,10 @@ def main() -> None:
     with open(args.csv, newline="") as f:
         rows = list(csv.DictReader(f))
 
-    # Ensure new column exists in all rows
+    # Ensure new columns exist in all rows
     for r in rows:
         r.setdefault("reasoning_score", "")
+        r.setdefault("reasoning_explanation", "")
 
     targets = []
     for r in rows:
@@ -259,13 +281,14 @@ def main() -> None:
         qt = r.get("qa_type", "?")
         print(f"  [{i+1}/{len(targets)}] {tag}  qa_type={qt} ...", end=" ", flush=True)
         try:
-            score = score_row(client, r)
+            score, explanation = score_row(client, r)
             if score is None:
                 print("PARSE ERROR — skipping")
                 failed += 1
                 completed_scores.append(float("nan"))
             else:
                 r["reasoning_score"] = f"{score:.4f}"
+                r["reasoning_explanation"] = explanation or ""
                 completed_scores.append(score)
                 print(f"{score:.4f}")
         except anthropic.APIError as e:

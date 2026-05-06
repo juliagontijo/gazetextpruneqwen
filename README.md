@@ -229,6 +229,7 @@ One row per sample per condition. Key columns:
 | `narration_gt` | Ground-truth Ego4D narration for the clip |
 | `cot_coverage` | BERTScore recall of CoT vs. narration (filled offline by `score_cot.py`) |
 | `reasoning_score` | LLM-as-Judge rubric score 0–1 (filled offline by `score_reasoning.py`) |
+| `reasoning_explanation` | Compact JSON with per-criterion `{"score": 0\|1, "reason": "..."}` |
 
 ### `viz/`
 
@@ -299,7 +300,7 @@ Each MCQ row's CoT is evaluated on 5 binary criteria specific to the question ty
 | spatial | object_identification · spatial_description · spatial_inference · logical_consistency · visual_grounding |
 | temporal | event_identification · sequence_description · temporal_inference · logical_consistency · visual_grounding |
 
-The mean of the 5 binary scores (0 or 1 each) is written to `reasoning_score` (range 0.0–1.0). The system prompt is cached across API calls to reduce cost. Progress is written to disk after every row so the script is safe to interrupt and resume.
+The mean of the 5 binary scores (0 or 1 each) is written to `reasoning_score` (range 0.0–1.0). A second column, `reasoning_explanation`, stores a compact JSON object with the per-criterion score **and** a one-sentence reason for that score — making it easy to audit why a particular CoT was rated as it was. The system prompt is cached across API calls to reduce cost. Progress is written to disk after every row so the script is safe to interrupt and resume.
 
 **Hypothesis**: pruning degrades `reasoning_score` before it affects raw `correct` accuracy — making this metric a more sensitive early signal of quality degradation.
 

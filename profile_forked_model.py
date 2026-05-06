@@ -69,6 +69,7 @@ CSV_COLUMNS = [
     "narration_gt",
     "cot_coverage",
     "reasoning_score",
+    "reasoning_explanation",
 ]
 
 

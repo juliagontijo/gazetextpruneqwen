@@ -51,8 +51,14 @@ run_condition() {
 
 score_cot() {
   echo ""
-  echo "  Scoring CoT coverage..."
+  echo "  Scoring CoT coverage (BERTScore recall)..."
   $PY score_cot.py --csv $RESULTS_CSV
+}
+
+score_reasoning() {
+  echo ""
+  echo "  Scoring reasoning quality (LLM-as-Judge)..."
+  $PY score_reasoning.py --csv $RESULTS_CSV
 }
 
 # ────────────────────────────────────────────────────────────
@@ -73,6 +79,7 @@ if [[ " ${STEPS[*]} " =~ " 1 " ]]; then
   run_condition "layer20_text_r0.5" --prune-text --prune-layers 20 --prune-ratio 0.5
 
   score_cot
+  score_reasoning
 
   echo ""
   echo "  Step 1 done. Set BEST_LAYER in this script, then run:"
@@ -100,6 +107,7 @@ if [[ " ${STEPS[*]} " =~ " 2 " ]]; then
                                                         --prune-layers $BEST_LAYER --prune-ratio 0.5
 
   score_cot
+  score_reasoning
 
   echo ""
   echo "  Step 2 done. Set BEST_METHOD in this script, then run:"
@@ -131,6 +139,7 @@ if [[ " ${STEPS[*]} " =~ " 3 " ]]; then
   done
 
   score_cot
+  score_reasoning
 
   echo ""
   echo "  Step 3 done. Set BEST_RATIO in this script, then run:"
@@ -156,6 +165,7 @@ if [[ " ${STEPS[*]} " =~ " 4 " ]]; then
         --prune-layers $BEST_LAYER --prune-ratio $BEST_RATIO
     done
     score_cot
+    score_reasoning
   else
     echo "  Skipped — BEST_METHOD='$BEST_METHOD' is not combined."
   fi

@@ -225,6 +225,10 @@ One row per sample per condition. Key columns:
 | `decode_s` | Total decode wall time in seconds |
 | `decode_ms_per_token` | Decode speed |
 | `correct` | 1/0 for MCQ; BERTScore F1 for caption (filled offline by `score_captions.py`) |
+| `cot_text` | Chain-of-thought prefix extracted before "Answer:" |
+| `narration_gt` | Ground-truth Ego4D narration for the clip |
+| `cot_coverage` | BERTScore recall of CoT vs. narration (filled offline by `score_cot.py`) |
+| `reasoning_score` | LLM-as-Judge rubric score 0–1 (filled offline by `score_reasoning.py`) |
 
 ### `viz/`
 
@@ -239,9 +243,13 @@ Markdown log with per-run timing table, model output, and pruning config for sin
 
 ---
 
-## Offline Caption Scoring
+## Offline Scoring
 
-Caption-task runs leave the `correct` column empty. Score them offline:
+All offline scoring scripts are safe to re-run on a CSV that has grown over time — they skip rows already scored.
+
+### Caption scoring (`score_captions.py`)
+
+Caption-task runs leave the `correct` column empty. Score them offline with BERTScore F1:
 
 ```bash
 python score_captions.py --csv results/ablations.csv
@@ -253,7 +261,47 @@ python score_captions.py --csv results/ablations.csv --config-tag caption_text_l
 python score_captions.py --csv results/ablations.csv --rescale
 ```
 
-Uses `microsoft/deberta-xlarge-mnli` as the BERTScore backbone. The script only scores rows where `correct` is empty, so it is safe to run repeatedly on a mixed MCQ + caption CSV.
+Uses `microsoft/deberta-xlarge-mnli` as the BERTScore backbone.
+
+### CoT coverage (`score_cot.py`)
+
+Measures how well the model's chain-of-thought covers the ground-truth scene content using BERTScore **recall** — for each semantic unit in the Ego4D narration, how well is it represented in the CoT? High recall means the model's reasoning mentions the things that were actually happening.
+
+```bash
+python score_cot.py --csv results/ablations.csv
+
+# Score only a specific condition
+python score_cot.py --csv results/ablations.csv --config-tag text_l10_r0.5
+```
+
+Writes the recall score to `cot_coverage`. Called automatically by `run_ablations.sh` after each step.
+
+### Reasoning quality (`score_reasoning.py`)
+
+LLM-as-Judge evaluation using Claude (`claude-opus-4-7`) with per-QA-type rubrics. Requires `ANTHROPIC_API_KEY` in the environment.
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+python score_reasoning.py --csv results/ablations.csv
+
+# Score only a specific condition
+python score_reasoning.py --csv results/ablations.csv --config-tag text_l10_r0.5
+
+# Dry-run to see what would be scored without calling the API
+python score_reasoning.py --csv results/ablations.csv --dry-run
+```
+
+Each MCQ row's CoT is evaluated on 5 binary criteria specific to the question type:
+
+| QA type | Criteria |
+|---------|----------|
+| causal | action_observation · context_identification · causal_inference · logical_consistency · visual_grounding |
+| spatial | object_identification · spatial_description · spatial_inference · logical_consistency · visual_grounding |
+| temporal | event_identification · sequence_description · temporal_inference · logical_consistency · visual_grounding |
+
+The mean of the 5 binary scores (0 or 1 each) is written to `reasoning_score` (range 0.0–1.0). The system prompt is cached across API calls to reduce cost. Progress is written to disk after every row so the script is safe to interrupt and resume.
+
+**Hypothesis**: pruning degrades `reasoning_score` before it affects raw `correct` accuracy — making this metric a more sensitive early signal of quality degradation.
 
 ---
 
@@ -280,6 +328,8 @@ python visualize_gaze.py --frames 4 --sigma 0.05 --save   # saves to gaze_vis.pn
 ├── download_ego4d.py         # download Ego4D clips from HuggingFace
 ├── preprocess_frames.py      # extract frames + gaze.json from raw clips
 ├── score_captions.py         # offline BERTScore for caption-task rows
+├── score_cot.py              # offline BERTScore recall for CoT coverage
+├── score_reasoning.py        # offline LLM-as-Judge reasoning quality scorer
 ├── visualize_gaze.py         # gaze heatmap visualisation tool
 ├── environment.yml           # conda environment spec
 ├── data/EgoGazeVQA_full/     # dataset (videos + frames + metadata)

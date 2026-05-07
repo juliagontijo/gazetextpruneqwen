@@ -55,10 +55,18 @@ try:
     import inspect as _inspect
     _ccm_params   = set(_inspect.signature(_ccm_raw).parameters)
     _cswcm_params = set(_inspect.signature(_cswcm_raw).parameters)
+    # New API (4.51+) has 'inputs_embeds'/'config'; old API has 'input_embeds'+'cache_position'.
+    # If it's the old API we can't satisfy its required args from our call site, so fall back to None.
+    _CCM_NEW_API   = "inputs_embeds" in _ccm_params or "config" in _ccm_params
+    _CSWCM_NEW_API = "inputs_embeds" in _cswcm_params or "config" in _cswcm_params
     def create_causal_mask(**kwargs):
-        return _ccm_raw(**{k: v for k, v in kwargs.items() if k in _ccm_params})
+        if _CCM_NEW_API:
+            return _ccm_raw(**{k: v for k, v in kwargs.items() if k in _ccm_params})
+        return None
     def create_sliding_window_causal_mask(**kwargs):
-        return _cswcm_raw(**{k: v for k, v in kwargs.items() if k in _cswcm_params})
+        if _CSWCM_NEW_API:
+            return _cswcm_raw(**{k: v for k, v in kwargs.items() if k in _cswcm_params})
+        return None
 except ImportError:
     def create_causal_mask(**kwargs):
         return None

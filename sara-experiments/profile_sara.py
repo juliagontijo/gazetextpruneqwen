@@ -35,14 +35,16 @@ from qwen_vl_utils import process_vision_info
 
 # ── Resolve repo root (search upward for modeling_qwen2_vl.py) ──────────────
 def _find_repo_root() -> Path:
-    here = Path(__file__).resolve().parent
-    candidates = [here] + [here.parents[i] for i in range(6)]
-    for c in candidates:
-        if (c / "modeling_qwen2_vl.py").exists():
-            return c
-    raise FileNotFoundError(
-        "Cannot find repo root: modeling_qwen2_vl.py not found in any ancestor directory."
-    )
+    current = Path(__file__).resolve().parent
+    while True:
+        if (current / "modeling_qwen2_vl.py").exists():
+            return current
+        parent = current.parent
+        if parent == current:
+            raise FileNotFoundError(
+                "Cannot find repo root: modeling_qwen2_vl.py not found in any ancestor directory."
+            )
+        current = parent
 
 
 REPO_ROOT = _find_repo_root()

@@ -479,6 +479,18 @@ def parse_answer(output: str) -> str | None:
     return m.group(1).upper() if m else None
 
 
+def load_completed_pairs(csv_path: Path) -> set[tuple[str, int]]:
+    """Return set of (config_tag, sample_idx) already written to the CSV."""
+    if not csv_path.exists():
+        return set()
+    with open(csv_path, newline="") as f:
+        return {
+            (r["config_tag"], int(r["sample_idx"]))
+            for r in csv.DictReader(f)
+            if r.get("config_tag") and r.get("sample_idx", "") != ""
+        }
+
+
 def append_csv_row(csv_path: Path, row: dict):
     is_new = not csv_path.exists()
     csv_path.parent.mkdir(parents=True, exist_ok=True)
@@ -886,6 +898,12 @@ def main(
     samples = load_samples(num_samples, seed, qa_types)
     print(f"Loaded {len(samples)} samples.")
 
+    completed = load_completed_pairs(results_csv) if results_csv else set()
+    if completed:
+        n_skip = sum(1 for i in range(len(samples)) if (config_tag, i) in completed)
+        if n_skip:
+            print(f"Resuming: skipping {n_skip} already-completed samples for '{config_tag}'.")
+
     print("\nWarming up...")
     warmup_inputs, _, warmup_frame_gaze, _ = build_inputs(processor, samples[0], n_frames, task=task)
     generation_kwargs_warmup = build_pruning_kwargs(
@@ -913,6 +931,10 @@ def main(
     all_results: list[dict] = []
 
     for idx, row in enumerate(samples):
+        if (config_tag, idx) in completed:
+            print(f"  [{idx:03d}] skipped (already in CSV)")
+            continue
+
         csv_row = run_sample(
             model=model,
             processor=processor,

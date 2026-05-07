@@ -50,9 +50,17 @@ except (ImportError, AttributeError):
         return lambda cls: cls
 
 try:
-    from ...masking_utils import create_causal_mask, create_sliding_window_causal_mask
+    from ...masking_utils import create_causal_mask as _ccm_raw, \
+                                 create_sliding_window_causal_mask as _cswcm_raw
+    import inspect as _inspect
+    _ccm_params   = set(_inspect.signature(_ccm_raw).parameters)
+    _cswcm_params = set(_inspect.signature(_cswcm_raw).parameters)
+    def create_causal_mask(**kwargs):
+        return _ccm_raw(**{k: v for k, v in kwargs.items() if k in _ccm_params})
+    def create_sliding_window_causal_mask(**kwargs):
+        return _cswcm_raw(**{k: v for k, v in kwargs.items() if k in _cswcm_params})
 except ImportError:
-    def create_causal_mask(**kwargs):             # None = no explicit mask
+    def create_causal_mask(**kwargs):
         return None
     def create_sliding_window_causal_mask(**kwargs):
         return None

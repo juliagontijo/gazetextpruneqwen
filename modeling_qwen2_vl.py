@@ -804,7 +804,7 @@ class Qwen2VLPreTrainedModel(PreTrainedModel):
         super()._init_weights(module)
         if isinstance(module, VisionRotaryEmbedding):
             inv_freq = 1.0 / (module.theta ** (torch.arange(0, module.dim, 2, dtype=torch.float) / module.dim))
-            init.copy_(module.inv_freq, inv_freq)
+            module.inv_freq.copy_(inv_freq)
 
 
 @auto_docstring

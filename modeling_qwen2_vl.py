@@ -55,10 +55,11 @@ try:
     import inspect as _inspect
     _ccm_params   = set(_inspect.signature(_ccm_raw).parameters)
     _cswcm_params = set(_inspect.signature(_cswcm_raw).parameters)
-    # New API (4.51+) has 'inputs_embeds'/'config'; old API has 'input_embeds'+'cache_position'.
-    # If it's the old API we can't satisfy its required args from our call site, so fall back to None.
-    _CCM_NEW_API   = "inputs_embeds" in _ccm_params or "config" in _ccm_params
-    _CSWCM_NEW_API = "inputs_embeds" in _cswcm_params or "config" in _cswcm_params
+    # New API (4.51+) uses 'inputs_embeds' (plural); old API uses 'input_embeds' (singular) + 'cache_position'.
+    # Only the plural form is unique to the new API — don't use 'config' as a discriminator
+    # because some old versions also have a 'config' param.
+    _CCM_NEW_API   = "inputs_embeds" in _ccm_params
+    _CSWCM_NEW_API = "inputs_embeds" in _cswcm_params
     def create_causal_mask(**kwargs):
         if _CCM_NEW_API:
             return _ccm_raw(**{k: v for k, v in kwargs.items() if k in _ccm_params})

@@ -18,6 +18,8 @@
 # limitations under the License.
 """PyTorch Qwen2-VL model."""
 
+from __future__ import annotations  # enables X | Y union syntax on Python 3.9
+
 import itertools
 from collections.abc import Callable
 from dataclasses import dataclass

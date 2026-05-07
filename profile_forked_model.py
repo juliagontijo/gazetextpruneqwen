@@ -88,26 +88,35 @@ def load_forked_qwen2vl_class():
 Qwen2VLForConditionalGeneration = load_forked_qwen2vl_class()
 
 
-def mps_sync():
-    if torch.backends.mps.is_available():
+def device_sync():
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    elif torch.backends.mps.is_available():
         torch.mps.synchronize()
 
 
-def mps_allocated_mb() -> float:
+def device_allocated_mb() -> float:
+    if torch.cuda.is_available():
+        return torch.cuda.memory_allocated() / 1e6
     if torch.backends.mps.is_available():
         return torch.mps.current_allocated_memory() / 1e6
     return 0.0
 
 
+# Keep old names as aliases so any external callers still work.
+mps_sync = device_sync
+mps_allocated_mb = device_allocated_mb
+
+
 @contextlib.contextmanager
 def timed_block(label: str, results: dict):
-    mps_sync()
-    mem_before = mps_allocated_mb()
+    device_sync()
+    mem_before = device_allocated_mb()
     t0 = time.perf_counter()
     yield
-    mps_sync()
+    device_sync()
     elapsed = time.perf_counter() - t0
-    mem_after = mps_allocated_mb()
+    mem_after = device_allocated_mb()
     results[label] = {
         "time_s": elapsed,
         "mem_delta_mb": mem_after - mem_before,
@@ -321,7 +330,12 @@ def build_inputs(processor, row: dict, n_frames: int, task: str = "mcq"):
         padding=True,
         return_tensors="pt",
     )
-    device = "mps" if torch.backends.mps.is_available() else "cpu"
+    if torch.cuda.is_available():
+        device = "cuda"
+    elif torch.backends.mps.is_available():
+        device = "mps"
+    else:
+        device = "cpu"
     inputs = inputs.to(device)
 
     return inputs, sample_log, frame_gaze, frames
@@ -869,7 +883,12 @@ def main(
     results_csv: Path | None = None,
     save_viz: bool = False,
 ):
-    device = "mps" if torch.backends.mps.is_available() else "cpu"
+    if torch.cuda.is_available():
+        device = "cuda"
+    elif torch.backends.mps.is_available():
+        device = "mps"
+    else:
+        device = "cpu"
     prune_layers = prune_layers or [27]
 
     # Auto-generate config_tag if not provided
@@ -898,12 +917,12 @@ def main(
     print(f"{'─'*60}")
 
     # ── Load model ────────────────────────────────────────────────────────────
-    # Brief pause to let the OS reclaim MPS memory from any previous process
-    # that may not have fully released it yet.
     if torch.backends.mps.is_available():
         import time as _time
         _time.sleep(5)
         torch.mps.empty_cache()
+    elif torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
     t_load = time.perf_counter()
     model = Qwen2VLForConditionalGeneration.from_pretrained(
@@ -914,10 +933,10 @@ def main(
     )
     model.eval()
     processor = AutoProcessor.from_pretrained(MODEL_ID)
-    mps_sync()
+    device_sync()
     load_s = time.perf_counter() - t_load
 
-    mem_after_load = mps_allocated_mb()
+    mem_after_load = device_allocated_mb()
     print(f"Model loaded in {load_s:.2f}s  ({mem_after_load:.0f} MB)")
 
     FULL_LOAD_MB = 4300  # full bfloat16 load = ~4418 MB; abort if significantly below

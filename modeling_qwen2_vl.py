@@ -53,12 +53,31 @@ except ImportError:
     def torch_compilable_check(condition, message=""):
         if not condition:
             raise ValueError(message)
-from ...utils.generic import (
-    is_flash_attention_requested,
-    maybe_autocast,
-    merge_with_config_defaults,
-)
-from ...utils.output_capturing import capture_outputs
+try:
+    from ...utils.generic import (
+        is_flash_attention_requested,
+        maybe_autocast,
+        merge_with_config_defaults,
+    )
+except ImportError:
+    import contextlib as _contextlib
+
+    def is_flash_attention_requested(config) -> bool:
+        return getattr(config, "_attn_implementation", "eager") == "flash_attention_2"
+
+    @_contextlib.contextmanager
+    def maybe_autocast(device_type="cpu", enabled=True, **kwargs):
+        with torch.autocast(device_type=device_type, enabled=enabled):
+            yield
+
+    def merge_with_config_defaults(fn):
+        return fn
+
+try:
+    from ...utils.output_capturing import capture_outputs
+except ImportError:
+    def capture_outputs(fn):
+        return fn
 from .configuration_qwen2_vl import Qwen2VLConfig, Qwen2VLTextConfig, Qwen2VLVisionConfig
 
 

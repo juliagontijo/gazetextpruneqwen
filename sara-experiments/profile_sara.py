@@ -315,7 +315,7 @@ def build_inputs(processor, row: dict, n_frames: int, task: str = "mcq"):
         padding=True,
         return_tensors="pt",
     )
-    device = "mps" if torch.backends.mps.is_available() else "cpu"
+    device = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
     inputs = inputs.to(device)
 
     return inputs, sample_log, frame_gaze, frames
@@ -839,7 +839,7 @@ def main(
     results_csv: Path | None = None,
     save_viz: bool = False,
 ):
-    device = "mps" if torch.backends.mps.is_available() else "cpu"
+    device = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
     prune_layers = prune_layers or [27]
 
     if not config_tag:

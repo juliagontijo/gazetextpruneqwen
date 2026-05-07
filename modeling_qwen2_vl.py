@@ -55,18 +55,26 @@ try:
     import inspect as _inspect
     _ccm_params   = set(_inspect.signature(_ccm_raw).parameters)
     _cswcm_params = set(_inspect.signature(_cswcm_raw).parameters)
-    # New API (4.51+) uses 'inputs_embeds' (plural); old API uses 'input_embeds' (singular) + 'cache_position'.
-    # Only the plural form is unique to the new API — don't use 'config' as a discriminator
-    # because some old versions also have a 'config' param.
-    _CCM_NEW_API   = "inputs_embeds" in _ccm_params
-    _CSWCM_NEW_API = "inputs_embeds" in _cswcm_params
+    # Detect whether this version's API accepts 'inputs_embeds' (plural, ≥4.51) or
+    # 'input_embeds' (singular, e.g. 4.57.x) — both are the new callable API.
+    # Fall back to None only if neither form is present (truly old/missing API).
+    _CCM_NEW_API   = "inputs_embeds" in _ccm_params or "input_embeds" in _ccm_params
+    _CSWCM_NEW_API = "inputs_embeds" in _cswcm_params or "input_embeds" in _cswcm_params
+    def _remap_embeds(kwargs, params):
+        # Normalize inputs_embeds↔input_embeds so the right key reaches the callee.
+        kw = dict(kwargs)
+        if "input_embeds" in params and "inputs_embeds" in kw:
+            kw["input_embeds"] = kw.pop("inputs_embeds")
+        elif "inputs_embeds" in params and "input_embeds" in kw:
+            kw["inputs_embeds"] = kw.pop("input_embeds")
+        return {k: v for k, v in kw.items() if k in params}
     def create_causal_mask(**kwargs):
         if _CCM_NEW_API:
-            return _ccm_raw(**{k: v for k, v in kwargs.items() if k in _ccm_params})
+            return _ccm_raw(**_remap_embeds(kwargs, _ccm_params))
         return None
     def create_sliding_window_causal_mask(**kwargs):
         if _CSWCM_NEW_API:
-            return _cswcm_raw(**{k: v for k, v in kwargs.items() if k in _cswcm_params})
+            return _cswcm_raw(**_remap_embeds(kwargs, _cswcm_params))
         return None
 except ImportError:
     def create_causal_mask(**kwargs):

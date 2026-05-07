@@ -1,6 +1,11 @@
 # --- Core model & inference ---
-torch==2.11.0
-torchvision==0.26.0
+# Install torch manually first — match your CUDA version:
+#   CUDA 12.1:  pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+#   CUDA 11.8:  pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+#   MPS (Mac):  pip install torch torchvision
+# Then run: pip install -r requirements.txt
+torch>=2.4.0
+torchvision>=0.19.0
 accelerate==1.13.0
 git+https://github.com/huggingface/transformers@a374d990d422357a854ff7f4f5f1cf9f88308ade
 qwen-vl-utils==0.0.14

@@ -1060,6 +1060,22 @@ class Qwen2VLTextModel(Qwen2VLPreTrainedModel):
                 causal_mask_mapping["sliding_attention"] = create_sliding_window_causal_mask(**mask_kwargs)
 
         hidden_states = inputs_embeds
+
+        # Fallback for older transformers where create_causal_mask() returns None.
+        # Without a causal mask during prefill, every token attends to all future tokens,
+        # corrupting the KV cache and producing garbage / repetitive decode output.
+        if causal_mask_mapping.get("full_attention") is None:
+            q_len = hidden_states.shape[1]
+            past_len = past_key_values.get_seq_length() if past_key_values is not None else 0
+            if q_len > 1:  # decode steps (q_len==1) need no mask
+                kv_len = q_len + past_len
+                causal = torch.full(
+                    (q_len, kv_len), float("-inf"),
+                    dtype=hidden_states.dtype, device=hidden_states.device,
+                )
+                causal = torch.triu(causal, diagonal=past_len + 1)
+                causal_mask_mapping["full_attention"] = causal[None, None, :, :]  # [1, 1, q_len, kv_len]
+
         position_embeddings = self.rotary_emb(hidden_states, position_ids)
 
         ## ---- PRUNING SETUP ----

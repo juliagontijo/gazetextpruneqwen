@@ -29,23 +29,76 @@ import torch.nn.functional as F
 from torch.nn import LayerNorm
 
 import torch.nn.init as init
+# ── Stable imports (present in all supported transformers versions) ──────────
 from ...activations import ACT2FN
 from ...cache_utils import Cache, DynamicCache
 from ...generation import GenerationMixin
-from ...integrations import use_kernel_forward_from_hub
-from ...masking_utils import create_causal_mask, create_sliding_window_causal_mask
-from ...modeling_flash_attention_utils import FlashAttentionKwargs
-from ...modeling_layers import GradientCheckpointingLayer
 from ...modeling_outputs import BaseModelOutputWithPast, BaseModelOutputWithPooling, ModelOutput
-from ...modeling_rope_utils import ROPE_INIT_FUNCTIONS
-from ...modeling_utils import ALL_ATTENTION_FUNCTIONS, PreTrainedModel
-from ...processing_utils import Unpack
-from ...utils import (
-    TransformersKwargs,
-    auto_docstring,
-    can_return_tuple,
-    logging,
-)
+from ...modeling_utils import PreTrainedModel
+from ...utils import logging
+
+# ── Imports added in transformers ~4.44-4.50; no-op fallbacks keep older ─────
+# versions working.  Flash attention is never used here (attn_implementation=
+# "eager"), so every fallback is behaviourally identical to the real symbol.
+
+try:
+    from ...integrations import use_kernel_forward_from_hub
+except (ImportError, AttributeError):
+    def use_kernel_forward_from_hub(_name):       # decorator → identity
+        return lambda cls: cls
+
+try:
+    from ...masking_utils import create_causal_mask, create_sliding_window_causal_mask
+except ImportError:
+    def create_causal_mask(**kwargs):             # None = no explicit mask
+        return None
+    def create_sliding_window_causal_mask(**kwargs):
+        return None
+
+try:
+    from ...modeling_flash_attention_utils import FlashAttentionKwargs
+except ImportError:
+    FlashAttentionKwargs = dict                   # type: ignore[misc,assignment]
+
+try:
+    from ...modeling_layers import GradientCheckpointingLayer
+except ImportError:
+    GradientCheckpointingLayer = nn.Module        # gradient-ckpt just won't activate
+
+try:
+    from ...modeling_rope_utils import ROPE_INIT_FUNCTIONS
+except ImportError:
+    ROPE_INIT_FUNCTIONS = {}
+
+try:
+    from ...modeling_utils import ALL_ATTENTION_FUNCTIONS
+except (ImportError, AttributeError):
+    class _AttnRegistry(dict):
+        def get_interface(self, impl, fallback):
+            return self.get(impl, fallback)
+    ALL_ATTENTION_FUNCTIONS = _AttnRegistry()
+
+try:
+    from ...processing_utils import Unpack
+except ImportError:
+    try:
+        from typing import Unpack                 # Python 3.11+
+    except ImportError:
+        try:
+            from typing_extensions import Unpack
+        except ImportError:
+            Unpack = None                         # type: ignore[assignment,misc]
+
+try:
+    from ...utils import TransformersKwargs, auto_docstring, can_return_tuple
+except ImportError:
+    TransformersKwargs = dict                     # type: ignore[misc,assignment]
+    def auto_docstring(*args, **kwargs):          # decorator → identity
+        if len(args) == 1 and callable(args[0]) and not kwargs:
+            return args[0]
+        return lambda fn: fn
+    def can_return_tuple(fn):
+        return fn
 
 try:
     from ...utils import torch_compilable_check
@@ -53,6 +106,8 @@ except ImportError:
     def torch_compilable_check(condition, message=""):
         if not condition:
             raise ValueError(message)
+
+# ── New in transformers 4.51 ──────────────────────────────────────────────────
 try:
     from ...utils.generic import (
         is_flash_attention_requested,
@@ -63,20 +118,22 @@ except ImportError:
     import contextlib as _contextlib
 
     def is_flash_attention_requested(config) -> bool:
+        # With attn_implementation="eager" this always returns False.
         return getattr(config, "_attn_implementation", "eager") == "flash_attention_2"
 
     @_contextlib.contextmanager
     def maybe_autocast(device_type="cpu", enabled=True, **kwargs):
+        # Used only with enabled=False (force float32 for RoPE) — equivalent no-op.
         with torch.autocast(device_type=device_type, enabled=enabled):
             yield
 
-    def merge_with_config_defaults(fn):
+    def merge_with_config_defaults(fn):          # decorator → identity
         return fn
 
 try:
     from ...utils.output_capturing import capture_outputs
 except ImportError:
-    def capture_outputs(fn):
+    def capture_outputs(fn):                     # decorator → identity
         return fn
 from .configuration_qwen2_vl import Qwen2VLConfig, Qwen2VLTextConfig, Qwen2VLVisionConfig
 
@@ -872,7 +929,10 @@ class Qwen2VLTextModel(Qwen2VLPreTrainedModel):
 
         # torch.jit.trace() doesn't support cache objects in the output
         if use_cache and past_key_values is None and not torch.jit.is_tracing():
-            past_key_values = DynamicCache(config=self.config)
+            try:
+                past_key_values = DynamicCache(config=self.config)
+            except TypeError:
+                past_key_values = DynamicCache()
 
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids)

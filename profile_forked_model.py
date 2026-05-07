@@ -972,7 +972,7 @@ def main(
             max_new_tokens=8,
             **generation_kwargs_warmup,
         )
-    mps_sync()
+    device_sync()
     del warmup_inputs
     print("Warmup done.\n")
 

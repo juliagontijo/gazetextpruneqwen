@@ -2008,6 +2008,43 @@ class Qwen2VLForConditionalGeneration(Qwen2VLPreTrainedModel, GenerationMixin):
             model_inputs["pixel_values"] = None
             model_inputs["pixel_values_videos"] = None
 
+        # ── Older-transformers compatibility ────────────────────────────────────
+        # In transformers ≥ 4.51, _prepare_position_ids_for_generation() is called
+        # by the generation loop before each forward pass and updates position_ids to
+        # a fresh single-token decode position.  In older versions that method is
+        # never invoked, so model_inputs["position_ids"] still contains the stale
+        # full-prefill tensor [3, B, seq_len].
+        #
+        # Inside Qwen2VLRotaryEmbedding.forward that yields cos/sin of shape
+        # [3, B, seq_len, head_dim].  The single decode key [B, H, 1, head_dim]
+        # then broadcasts against [B, 1, seq_len, head_dim] → becomes
+        # [B, H, seq_len, head_dim].  The cache stores seq_len new keys but only
+        # 1 new value → key/value seq-len mismatch → RuntimeError at matmul.
+        #
+        # Fix: when a decode step is detected (past cache non-empty) and the
+        # position_ids in model_inputs is a full-sequence 3-D tensor that doesn't
+        # match the actual query length, recompute a single-token position using the
+        # stored rope_deltas (set during prefill by compute_3d_position_ids).
+        if past_key_values is not None:
+            try:
+                past_length = past_key_values.get_seq_length()
+            except Exception:
+                past_length = 0
+            if past_length > 0:
+                pos = model_inputs.get("position_ids")
+                q_len = input_ids.shape[-1]
+                if pos is not None and pos.ndim == 3 and pos.shape[-1] != q_len:
+                    rope_deltas = getattr(self.model, "rope_deltas", None)
+                    dev = input_ids.device
+                    # Sequential text position of the new decode token
+                    text_pos = torch.tensor([[past_length]], dtype=torch.long, device=dev)
+                    if rope_deltas is not None:
+                        # [1, B, 1] — same shape returned by _prepare_position_ids_for_generation
+                        model_inputs["position_ids"] = text_pos[None, ...] + rope_deltas.to(dev)
+                    else:
+                        # Fallback: replicate 1-D position across all 3 M-RoPE dimensions
+                        model_inputs["position_ids"] = text_pos[None, ...].expand(3, -1, -1)
+
         return model_inputs
 
     def _prepare_position_ids_for_generation(self, inputs_tensor, model_kwargs):

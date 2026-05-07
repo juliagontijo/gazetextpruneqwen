@@ -927,10 +927,10 @@ def main(
     t_load = time.perf_counter()
     model = Qwen2VLForConditionalGeneration.from_pretrained(
         MODEL_ID,
-        torch_dtype=torch.bfloat16,
-        device_map={"": device},
+        dtype=torch.bfloat16,
         attn_implementation="eager",
     )
+    model = model.to(device)
     model.eval()
     processor = AutoProcessor.from_pretrained(MODEL_ID)
     device_sync()

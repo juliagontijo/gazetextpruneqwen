@@ -92,7 +92,12 @@ except ImportError:
             Unpack = None                         # type: ignore[assignment,misc]
 
 try:
-    from ...utils import TransformersKwargs, auto_docstring, can_return_tuple
+    from ...utils import TransformersKwargs, can_return_tuple
+    from ...utils import auto_docstring as _auto_docstring_real
+    def auto_docstring(*args, **kwargs):          # wrap to suppress undoc-param warnings
+        if len(args) == 1 and callable(args[0]) and not kwargs:
+            return args[0]
+        return lambda fn: fn
 except ImportError:
     TransformersKwargs = dict                     # type: ignore[misc,assignment]
     def auto_docstring(*args, **kwargs):          # decorator → identity
@@ -748,6 +753,7 @@ class Qwen2VLDecoderLayer(GradientCheckpointingLayer):
 
 @auto_docstring
 class Qwen2VLPreTrainedModel(PreTrainedModel):
+    config_class = Qwen2VLConfig
     config: Qwen2VLConfig
     base_model_prefix = "model"
     input_modalities = ("image", "video", "text")
@@ -769,6 +775,7 @@ class Qwen2VLPreTrainedModel(PreTrainedModel):
 
 @auto_docstring
 class Qwen2VisionTransformerPretrainedModel(Qwen2VLPreTrainedModel):
+    config_class = Qwen2VLVisionConfig
     config: Qwen2VLVisionConfig
     input_modalities = ("image", "video")
     _no_split_modules = ["Qwen2VLVisionBlock"]
@@ -881,6 +888,7 @@ class Qwen2VisionTransformerPretrainedModel(Qwen2VLPreTrainedModel):
 
 @auto_docstring
 class Qwen2VLTextModel(Qwen2VLPreTrainedModel):
+    config_class = Qwen2VLTextConfig
     config: Qwen2VLTextConfig
     input_modalities = ("text",)
     _can_record_outputs = {

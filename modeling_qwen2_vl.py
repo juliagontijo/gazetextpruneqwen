@@ -1052,12 +1052,19 @@ class Qwen2VLTextModel(Qwen2VLPreTrainedModel):
         # It may already have been prepared by e.g. `generate`
         if not isinstance(causal_mask_mapping := attention_mask, dict):
             # Prepare mask arguments
+            _past_len = past_key_values.get_seq_length() if past_key_values is not None else 0
+            _seq_len  = inputs_embeds.shape[1]
+            _cache_position = torch.arange(
+                _past_len, _past_len + _seq_len,
+                dtype=torch.long, device=inputs_embeds.device,
+            )
             mask_kwargs = {
                 "config": self.config,
                 "inputs_embeds": inputs_embeds,
                 "attention_mask": attention_mask,
                 "past_key_values": past_key_values,
                 "position_ids": text_position_ids,
+                "cache_position": _cache_position,
             }
             # Create the masks
             causal_mask_mapping = {

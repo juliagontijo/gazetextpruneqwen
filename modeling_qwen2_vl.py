@@ -90,7 +90,24 @@ except ImportError:
     ROPE_INIT_FUNCTIONS = {}
 
 try:
-    from ...modeling_utils import ALL_ATTENTION_FUNCTIONS
+    from ...modeling_utils import ALL_ATTENTION_FUNCTIONS as _attn_raw
+    if hasattr(_attn_raw, 'get_interface'):
+        ALL_ATTENTION_FUNCTIONS = _attn_raw
+    else:
+        # Older transformers: AttentionInterface exists but lacks get_interface — wrap it.
+        class _AttnWrapper:
+            def __init__(self, orig):
+                self._orig = orig
+            def get_interface(self, impl, fallback):
+                try:
+                    return self._orig[impl]
+                except (KeyError, TypeError):
+                    return fallback
+            def __getitem__(self, key):
+                return self._orig[key]
+            def __contains__(self, key):
+                return key in self._orig
+        ALL_ATTENTION_FUNCTIONS = _AttnWrapper(_attn_raw)
 except (ImportError, AttributeError):
     class _AttnRegistry(dict):
         def get_interface(self, impl, fallback):

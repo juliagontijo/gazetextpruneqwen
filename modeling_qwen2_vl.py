@@ -148,6 +148,40 @@ from .configuration_qwen2_vl import Qwen2VLConfig, Qwen2VLTextConfig, Qwen2VLVis
 logger = logging.get_logger(__name__)
 
 
+def _patch_config_compat(config) -> None:
+    """
+    Back-fill attributes added in transformers 4.51 that older installs lack.
+    Mutates config in-place; safe to call multiple times (idempotent).
+    """
+    # ── rope_parameters ───────────────────────────────────────────────────────
+    if not (hasattr(config, "rope_parameters") and isinstance(config.rope_parameters, dict)):
+        rope_theta = getattr(config, "rope_theta", 1000000.0)
+        rope_scaling = getattr(config, "rope_scaling", None) or {}
+
+        rope_type = rope_scaling.get("type", rope_scaling.get("rope_type", "default"))
+
+        # mrope_section: try rope_scaling dict, then direct attr, then derive from head_dim
+        mrope_section = rope_scaling.get("mrope_section") or getattr(config, "mrope_section", None)
+        if mrope_section is None:
+            hidden_size = getattr(config, "hidden_size", 1536)
+            num_heads   = getattr(config, "num_attention_heads", 12)
+            head_dim    = hidden_size // num_heads
+            t           = head_dim // 4
+            hw          = (head_dim - t) // 2
+            mrope_section = [t, hw, hw]
+
+        params = {"rope_type": rope_type, "rope_theta": rope_theta, "mrope_section": mrope_section}
+        factor = rope_scaling.get("factor", 1.0)
+        if rope_type != "default":
+            params["factor"] = factor
+        config.rope_parameters = params
+
+    # ── layer_types ───────────────────────────────────────────────────────────
+    if not hasattr(config, "layer_types"):
+        n = getattr(config, "num_hidden_layers", 28)
+        config.layer_types = ["full_attention"] * n
+
+
 @dataclass
 @auto_docstring(
     custom_intro="""
@@ -897,6 +931,7 @@ class Qwen2VLTextModel(Qwen2VLPreTrainedModel):
     }
 
     def __init__(self, config: Qwen2VLTextConfig):
+        _patch_config_compat(config)
         super().__init__(config)
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size

@@ -449,7 +449,13 @@ def extract_video_embeds(model, inputs):
 def build_prefill_inputs(model, inputs, video_embeds=None):
     input_ids = inputs.input_ids
     attention_mask = inputs.attention_mask
-    mm_token_type_ids = inputs.mm_token_type_ids
+    mm_token_type_ids = getattr(inputs, "mm_token_type_ids", None)
+    if mm_token_type_ids is None:
+        # Older processor doesn't return mm_token_type_ids — reconstruct from input_ids.
+        # Convention: 0=text, 1=image token, 2=video token.
+        mm_token_type_ids = torch.zeros_like(input_ids)
+        mm_token_type_ids[input_ids == model.config.image_token_id] = 1
+        mm_token_type_ids[input_ids == model.config.video_token_id] = 2
     image_grid_thw = getattr(inputs, "image_grid_thw", None)
     video_grid_thw = getattr(inputs, "video_grid_thw", None)
 

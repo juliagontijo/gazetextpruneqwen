@@ -490,7 +490,7 @@ def build_prefill_inputs(model, inputs, video_embeds=None):
     }
 
 
-def run_decoder_only_generate(model, prefill_inputs, generation_kwargs, max_new_tokens, min_new_tokens):
+def run_decoder_only_generate(model, prefill_inputs, generation_kwargs, max_new_tokens):
     return model.generate(
         input_ids=prefill_inputs["input_ids"],
         inputs_embeds=prefill_inputs["inputs_embeds"],
@@ -501,7 +501,6 @@ def run_decoder_only_generate(model, prefill_inputs, generation_kwargs, max_new_
         video_grid_thw=prefill_inputs["video_grid_thw"],
         use_cache=True,
         max_new_tokens=max_new_tokens,
-        min_new_tokens=min_new_tokens,
         **generation_kwargs,
     )
 
@@ -687,6 +686,15 @@ def run_sample(
 
     prefill_inputs = build_prefill_inputs(model, inputs, video_embeds=video_embeds)
 
+    # Qwen2-VL ends responses with <|im_end|>; include both it and the
+    # base eos_token so generate() stops naturally rather than running to
+    # max_new_tokens every time.
+    eos_ids = list({
+        processor.tokenizer.eos_token_id,
+        processor.tokenizer.convert_tokens_to_ids("<|im_end|>"),
+    })
+    generation_kwargs["eos_token_id"] = eos_ids
+
     with torch.inference_mode():
         with timed_block("decode", results):
             generated_ids = run_decoder_only_generate(
@@ -694,7 +702,6 @@ def run_sample(
                 prefill_inputs,
                 generation_kwargs,
                 max_new_tokens=512,
-                min_new_tokens=200,
             )
 
     decoder_output  = decode_output(processor, inputs, generated_ids)
@@ -971,11 +978,16 @@ def main(
         generation_kwargs_warmup["gaze_scores"] = compute_gaze_scores(
             warmup_frame_gaze, warmup_inputs.video_grid_thw, device=device
         )
+    warmup_eos = list({
+        processor.tokenizer.eos_token_id,
+        processor.tokenizer.convert_tokens_to_ids("<|im_end|>"),
+    })
     with torch.inference_mode():
         _ = model.generate(
             **warmup_inputs,
             use_cache=True,
             max_new_tokens=8,
+            eos_token_id=warmup_eos,
             **generation_kwargs_warmup,
         )
     device_sync()

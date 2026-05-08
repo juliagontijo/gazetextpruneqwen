@@ -45,9 +45,9 @@ CONDITION_ORDER = [
     "8f_no_prune",
     "8f_text_l10_r0.5",
     "8f_gaze_l10_r0.5",
-    "16f_no_prune",
-    "16f_text_l10_r0.5",
-    "16f_text_l10_r0.25",
+    "12f_no_prune",
+    "12f_text_l10_r0.5",
+    "12f_text_l10_r0.25",
 ]
 
 CONDITION_LABEL = {
@@ -55,9 +55,9 @@ CONDITION_LABEL = {
     "8f_no_prune":        "8f  no-prune",
     "8f_text_l10_r0.5":   "8f  text-prune r=0.5  (iso-cost)",
     "8f_gaze_l10_r0.5":   "8f  gaze-prune r=0.5  (iso-cost)",
-    "16f_no_prune":       "16f no-prune",
-    "16f_text_l10_r0.5":  "16f text-prune r=0.5",
-    "16f_text_l10_r0.25": "16f text-prune r=0.25 (aggressive)",
+    "12f_no_prune":       "12f no-prune",
+    "12f_text_l10_r0.5":  "12f text-prune r=0.5",
+    "12f_text_l10_r0.25": "12f text-prune r=0.25 (aggressive)",
 }
 
 
@@ -215,9 +215,9 @@ def iso_cost_check(base_rows):
     checks = [
         ("8f_text_l10_r0.5",   "8f  text-prune r=0.5 "),
         ("8f_gaze_l10_r0.5",   "8f  gaze-prune r=0.5 "),
-        ("16f_no_prune",        "16f no-prune          "),
-        ("16f_text_l10_r0.5",  "16f text-prune r=0.5 "),
-        ("16f_text_l10_r0.25", "16f text-prune r=0.25"),
+        ("12f_no_prune",        "12f no-prune          "),
+        ("12f_text_l10_r0.5",  "12f text-prune r=0.5 "),
+        ("12f_text_l10_r0.25", "12f text-prune r=0.25"),
     ]
 
     print("\n" + "═" * 60)

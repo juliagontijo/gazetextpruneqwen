@@ -37,17 +37,17 @@ echo "=================================================="
 
 
 python profile_frames.py \
-  --condition 16f_no_prune \
+  --condition 12f_no_prune \
   --num-samples $N --seed $SEED \
   --results-csv $RESULTS_CSV
 
 python profile_frames.py \
-  --condition 16f_text_l10_r0.5 \
+  --condition 12f_text_l10_r0.5 \
   --num-samples $N --seed $SEED \
   --results-csv $RESULTS_CSV
 
 python profile_frames.py \
-  --condition 16f_text_l10_r0.25 \
+  --condition 12f_text_l10_r0.25 \
   --num-samples $N --seed $SEED \
   --results-csv $RESULTS_CSV
 

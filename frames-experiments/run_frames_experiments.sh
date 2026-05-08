@@ -33,10 +33,6 @@ echo "=================================================="
 echo "  PHASE 1: Inference — all 4 conditions, N=$N"
 echo "=================================================="
 
-python profile_frames.py \
-  --condition 4f_no_prune \
-  --num-samples $N --seed $SEED \
-  --results-csv $RESULTS_CSV
 
 python profile_frames.py \
   --condition 8f_no_prune \

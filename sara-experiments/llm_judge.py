@@ -141,7 +141,7 @@ def load_judge_model(model_id: str, device: str):
     return model, tokenizer
 
 
-def call_judge(model, tokenizer, prompt: str, device: str, max_new_tokens: int = 200) -> str:
+def call_judge(model, tokenizer, prompt: str, device: str, max_new_tokens: int = 400) -> str:
     """Run a single judge inference and return the decoded response."""
     messages = [{"role": "user", "content": prompt}]
     text = tokenizer.apply_chat_template(
@@ -163,7 +163,7 @@ def call_judge(model, tokenizer, prompt: str, device: str, max_new_tokens: int =
     return tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
 
 
-def judge_rows(targets: list[dict], model, tokenizer, device: str) -> None:
+def judge_rows(targets: list[dict], model, tokenizer, device: str, max_new_tokens: int = 400) -> None:
     """Judge each row; mutates rows in-place."""
     n = len(targets)
     for i, row in enumerate(targets):
@@ -173,7 +173,7 @@ def judge_rows(targets: list[dict], model, tokenizer, device: str) -> None:
         print(f"  [{i+1}/{n}] sample={row['sample_idx']} qa_type={qa_type} config={row['config_tag'][:35]}")
 
         try:
-            response = call_judge(model, tokenizer, prompt, device)
+            response = call_judge(model, tokenizer, prompt, device, max_new_tokens=max_new_tokens)
             score, reasoning = parse_score(response)
 
             if score is None:
@@ -229,6 +229,8 @@ def main():
     ap.add_argument("--judge-model", type=str,
                     default="Qwen/Qwen2.5-1.5B-Instruct",
                     help="HuggingFace model ID for the judge (default: Qwen2.5-1.5B-Instruct).")
+    ap.add_argument("--max-new-tokens", type=int, default=400,
+                    help="Max tokens for judge response (default: 400).")
     ap.add_argument("--dry-run",     action="store_true",
                     help="Print which rows would be judged without running inference.")
     args = ap.parse_args()
@@ -255,10 +257,10 @@ def main():
             print(f"  would judge: sample={r['sample_idx']} qa_type={r['qa_type']} config={r['config_tag']}")
         return
 
-    device = "mps" if torch.backends.mps.is_available() else "cpu"
+    device = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
     judge_model, tokenizer = load_judge_model(args.judge_model, device)
 
-    judge_rows(targets, judge_model, tokenizer, device)
+    judge_rows(targets, judge_model, tokenizer, device, max_new_tokens=args.max_new_tokens)
 
     # Free GPU/MPS memory before writing
     del judge_model

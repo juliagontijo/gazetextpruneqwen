@@ -78,6 +78,8 @@ CSV_COLUMNS = [
     "sample_idx",
     "video_id",
     "qa_type",
+    "question",            # MCQ question text
+    "answer_options",      # pipe-separated answer options
     "prune_text",
     "prune_gaze",
     "prune_random",
@@ -92,9 +94,20 @@ CSV_COLUMNS = [
     "correct_answer",
     "predicted_answer",
     "correct",
-    "cot_output",          # full decoder text (reasoning chain + final answer)
-    "llm_judge_score",     # 0–5, filled offline by llm_judge.py
-    "llm_judge_reasoning", # judge explanation, filled offline
+    "cot_output",              # full decoder text (reasoning chain + final answer)
+    "scene_description",       # concatenated ego4d narrations for the clip
+    # -- filled offline by llm_judge.py --mode reasoning --
+    "llm_judge_score",
+    "llm_judge_reasoning",
+    # -- filled offline by llm_judge.py --mode coverage --
+    "llm_coverage_scene",      # 0–5: does CoT reference actual scene objects/actions?
+    "llm_coverage_relevance",  # 0–5: does CoT address what the question asks?
+    "llm_coverage_logic",      # 0–5: is the reasoning chain coherent?
+    "llm_coverage_final",      # 0–5: overall coverage score
+    "llm_coverage_breakdown",  # judge's per-dimension explanation
+    # -- filled offline by llm_judge.py --mode preference --
+    "llm_pref_winner",         # A (no_prune) / B (this config) / Tie
+    "llm_pref_reasoning",      # why the judge preferred one over the other
 ]
 
 
@@ -479,6 +492,22 @@ def parse_answer(output: str) -> str | None:
     return m.group(1).upper() if m else None
 
 
+def strip_config_from_csv(csv_path: Path, config_tag: str):
+    """Remove all rows matching config_tag from the CSV, preserving all other rows."""
+    if not csv_path.exists():
+        return
+    with open(csv_path, newline="") as f:
+        rows = list(csv.DictReader(f))
+    kept = [r for r in rows if r.get("config_tag") != config_tag]
+    removed = len(rows) - len(kept)
+    fieldnames = list(rows[0].keys()) if rows else CSV_COLUMNS
+    with open(csv_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(kept)
+    print(f"Removed {removed} rows for '{config_tag}' from {csv_path}.")
+
+
 def load_completed_pairs(csv_path: Path) -> set[tuple[str, int]]:
     """Return set of (config_tag, sample_idx) already written to the CSV."""
     if not csv_path.exists():
@@ -702,11 +731,15 @@ def run_sample(
                 save_path=viz_path,
             )
 
+    scene_description = build_caption_ground_truth(frame_gaze, file_name=row["file_name"])
+
     csv_row = {
         "config_tag":            config_tag,
         "sample_idx":            sample_idx,
         "video_id":              row["video_id"],
         "qa_type":               row["qa_type"],
+        "question":              row.get("question", ""),
+        "answer_options":        row.get("answer_options", ""),
         "prune_text":            int(prune_text and not prune_random),
         "prune_gaze":            int(prune_gaze and not prune_random),
         "prune_random":          int(prune_random),
@@ -838,6 +871,7 @@ def main(
     config_tag: str = "",
     results_csv: Path | None = None,
     save_viz: bool = False,
+    reset: bool = False,
 ):
     device = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
     prune_layers = prune_layers or [27]
@@ -855,6 +889,9 @@ def main(
             method = "no_prune"
         active = prune_text or prune_gaze or prune_random
         config_tag = f"{method}_l{prune_layers[0]}_r{prune_ratio}" if active else "no_prune"
+
+    if reset and results_csv:
+        strip_config_from_csv(results_csv, config_tag)
 
     print(f"{'─'*60}")
     print(f"  Config tag : {config_tag}")
@@ -999,6 +1036,8 @@ if __name__ == "__main__":
     parser.add_argument("--config-tag",  type=str,  default="")
     parser.add_argument("--results-csv", type=Path, default=None)
     parser.add_argument("--save-viz",    action="store_true")
+    parser.add_argument("--reset",       action="store_true",
+                        help="Delete existing rows for this config_tag before running.")
 
     args = parser.parse_args()
 
@@ -1020,4 +1059,5 @@ if __name__ == "__main__":
         config_tag=args.config_tag,
         results_csv=args.results_csv,
         save_viz=args.save_viz,
+        reset=args.reset,
     )

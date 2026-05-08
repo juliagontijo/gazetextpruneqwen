@@ -57,9 +57,38 @@ python profile_sara.py \
   --config-tag combined_a0.5_l${BEST_LAYER}_r0.5 \
   --results-csv $RESULTS_CSV
 
+python profile_sara.py \
+  --frames $FRAMES --num-samples $N --seed $SEED \
+  --prune-text --prune-layers $BEST_LAYER --prune-ratio 0.75 \
+  --config-tag text_l${BEST_LAYER}_r0.75 \
+  --results-csv $RESULTS_CSV
+
+python profile_sara.py \
+  --frames $FRAMES --num-samples $N --seed $SEED \
+  --prune-gaze --prune-layers $BEST_LAYER --prune-ratio 0.75 \
+  --config-tag gaze_l${BEST_LAYER}_r0.75 \
+  --results-csv $RESULTS_CSV
+
 echo ""
 echo "=================================================="
-echo "  PHASE 2: Run all evaluations on new results"
+echo "  PHASE 2: Prompt ablation — gaze hint + scene oracle"
+echo "=================================================="
+
+python profile_sara.py \
+  --frames $FRAMES --num-samples $N --seed $SEED \
+  --gaze-prompt \
+  --config-tag no_prune_gaze_hint \
+  --results-csv $RESULTS_CSV
+
+python profile_sara.py \
+  --frames $FRAMES --num-samples $N --seed $SEED \
+  --scene-prompt \
+  --config-tag no_prune_scene_oracle \
+  --results-csv $RESULTS_CSV
+
+echo ""
+echo "=================================================="
+echo "  PHASE 4: Run all evaluations on new results"
 echo "  (already-scored rows skipped automatically)"
 echo "=================================================="
 
@@ -83,7 +112,7 @@ python evaluation.py \
 
 echo ""
 echo "=================================================="
-echo "  PHASE 3: Summary + significance tests"
+echo "  PHASE 5: Summary + significance tests"
 echo "=================================================="
 
 python summarize_results.py

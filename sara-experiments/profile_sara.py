@@ -249,6 +249,23 @@ def load_preprocessed_frames(file_name: str, n_frames: int):
     return frames, frame_gaze
 
 
+def gaze_to_region(gaze_x: float, gaze_y: float) -> str:
+    col = "left" if gaze_x < 0.33 else ("right" if gaze_x > 0.66 else "center")
+    row = "top" if gaze_y < 0.33 else ("bottom" if gaze_y > 0.66 else "middle")
+    return f"{row}-{col}" if row != "middle" else col
+
+
+def build_gaze_hint(frame_gaze: list) -> str:
+    parts = []
+    for i, g in enumerate(frame_gaze):
+        if g and "gaze_x" in g and "gaze_y" in g:
+            region = gaze_to_region(float(g["gaze_x"]), float(g["gaze_y"]))
+            parts.append(f"frame {i+1}: {region}")
+    if not parts:
+        return ""
+    return "Camera wearer's gaze: " + ", ".join(parts) + "."
+
+
 def build_caption_ground_truth(frame_gaze: list, file_name: str | None = None) -> str:
     if file_name is not None:
         cache = load_caption_gt_cache()
@@ -270,7 +287,8 @@ def build_caption_ground_truth(frame_gaze: list, file_name: str | None = None) -
     return " ".join(parts)
 
 
-def build_inputs(processor, row: dict, n_frames: int, task: str = "mcq"):
+def build_inputs(processor, row: dict, n_frames: int, task: str = "mcq",
+                 gaze_prompt: bool = False, scene_prompt: bool = False):
     local_path = DATA_DIR / row["file_name"]
 
     frames, frame_gaze = load_preprocessed_frames(row["file_name"], n_frames)
@@ -296,9 +314,21 @@ def build_inputs(processor, row: dict, n_frames: int, task: str = "mcq"):
     else:
         options = row["answer_options"].split("|")
         options_str = "\n".join(o.strip() for o in options)
+
+        extras = ""
+        if scene_prompt:
+            scene = build_caption_ground_truth(frame_gaze, file_name=row["file_name"])
+            if scene:
+                extras += f"Scene context: {scene}\n\n"
+        if gaze_prompt:
+            hint = build_gaze_hint(frame_gaze)
+            if hint:
+                extras += f"{hint}\n\n"
+
         prompt = (
             f"You are watching a first-person (egocentric) video. "
             f"The camera wearer is performing everyday activities.\n\n"
+            f"{extras}"
             f"Question: {row['question']}\n\n"
             f"Options:\n{options_str}\n\n"
             f"First describe what you observe in the video. "
@@ -490,8 +520,20 @@ def decode_output(processor, inputs, generated_ids):
 
 
 def parse_answer(output: str) -> str | None:
+    # Try strict format first: "Answer: X"
     m = re.search(r"Answer:\s*([A-E])", output, re.IGNORECASE)
-    return m.group(1).upper() if m else None
+    if m:
+        return m.group(1).upper()
+    # Fallback: "the answer is X", "option X", "choose X", "correct answer is X"
+    m = re.search(r"(?:answer is|option|choose|correct(?:\s+answer)?(?:\s+is)?)\s*:?\s*([A-E])\b",
+                  output, re.IGNORECASE)
+    if m:
+        return m.group(1).upper()
+    # Last resort: bare letter on its own line or at end of sentence
+    m = re.search(r"(?:^|\s)([A-E])(?:\.|$|\s*$)", output.strip(), re.IGNORECASE | re.MULTILINE)
+    if m:
+        return m.group(1).upper()
+    return None
 
 
 def strip_config_from_csv(csv_path: Path, config_tag: str):
@@ -639,13 +681,17 @@ def run_sample(
     device: str,
     seed: int,
     task: str = "mcq",
+    gaze_prompt: bool = False,
+    scene_prompt: bool = False,
     save_viz: bool = False,
     viz_suffix: str = "",
 ) -> dict:
     results: dict = {}
 
     with timed_block("input_preprocessing", results):
-        inputs, sample_log, frame_gaze, frames = build_inputs(processor, row, n_frames, task=task)
+        inputs, sample_log, frame_gaze, frames = build_inputs(
+            processor, row, n_frames, task=task,
+            gaze_prompt=gaze_prompt, scene_prompt=scene_prompt)
 
     generation_kwargs = build_pruning_kwargs(
         prune_text, prune_gaze, prune_random, prune_layers, prune_ratio, prune_alpha
@@ -682,7 +728,7 @@ def run_sample(
                 prefill_inputs,
                 generation_kwargs,
                 max_new_tokens=700,
-                min_new_tokens=50,
+                min_new_tokens=150,
             )
 
     decoder_output = decode_output(processor, inputs, generated_ids)
@@ -874,6 +920,8 @@ def main(
     results_csv: Path | None = None,
     save_viz: bool = False,
     reset: bool = False,
+    gaze_prompt: bool = False,
+    scene_prompt: bool = False,
 ):
     device = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
     prune_layers = prune_layers or [27]
@@ -992,6 +1040,8 @@ def main(
             task=task,
             save_viz=save_viz or (num_samples == 1),
             viz_suffix="",
+            gaze_prompt=gaze_prompt,
+            scene_prompt=scene_prompt,
         )
         all_results.append(csv_row)
 
@@ -1035,11 +1085,15 @@ if __name__ == "__main__":
     parser.add_argument("--prune-ratio",  type=float, default=0.5)
     parser.add_argument("--prune-alpha",  type=float, default=0.5)
 
-    parser.add_argument("--config-tag",  type=str,  default="")
-    parser.add_argument("--results-csv", type=Path, default=None)
-    parser.add_argument("--save-viz",    action="store_true")
-    parser.add_argument("--reset",       action="store_true",
+    parser.add_argument("--config-tag",   type=str,  default="")
+    parser.add_argument("--results-csv",  type=Path, default=None)
+    parser.add_argument("--save-viz",     action="store_true")
+    parser.add_argument("--reset",        action="store_true",
                         help="Delete existing rows for this config_tag before running.")
+    parser.add_argument("--gaze-prompt",  action="store_true",
+                        help="Inject per-frame gaze region hints into the prompt.")
+    parser.add_argument("--scene-prompt", action="store_true",
+                        help="Inject ground-truth scene narration into the prompt (oracle).")
 
     args = parser.parse_args()
 
@@ -1062,4 +1116,6 @@ if __name__ == "__main__":
         results_csv=args.results_csv,
         save_viz=args.save_viz,
         reset=args.reset,
+        gaze_prompt=args.gaze_prompt,
+        scene_prompt=args.scene_prompt,
     )

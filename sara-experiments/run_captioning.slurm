@@ -11,6 +11,8 @@
 cd "$(dirname "$0")"
 mkdir -p logs results
 
+pip install opencv-python-headless -q
+
 CAPTION_CSV="results/caption-experiments.csv"
 FRAMES=8
 BEST_LAYER=10

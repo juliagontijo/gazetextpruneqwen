@@ -1,12 +1,10 @@
 #!/usr/bin/env bash
 # ============================================================
-#  run_captioning.sh — Caption task experiment (parallel)
+#  run_captioning.sh — Caption task experiment (sequential)
 #
-#  Runs 4 conditions in parallel (2 at a time to avoid OOM).
-#  Each condition gets its own process and log file.
-#
-#  Hypothesis: text pruning ≈ random (generic prompt),
-#  gaze pruning outperforms both (scene-specific signal).
+#  Runs 4 conditions one at a time to avoid GPU OOM.
+#  caption_no_prune already done — skipped automatically
+#  via resume logic in profile_sara.py.
 #
 #  Run from sara-experiments/:
 #    bash run_captioning.sh
@@ -25,55 +23,39 @@ mkdir -p results logs
 
 echo "=================================================="
 echo "  Caption experiment — N=$N, $FRAMES frames"
-echo "  Running 2 conditions at a time in parallel"
+echo "  Running conditions sequentially (one GPU)"
 echo "=================================================="
 
-# ── Batch 1: no_prune + random ────────────────────────────
-echo "  [Batch 1] no_prune + random_r0.5 ..."
-
+echo "  [1/4] no_prune ..."
 python profile_sara.py \
   --frames $FRAMES --num-samples $N --seed $SEED \
   --task caption \
   --config-tag caption_no_prune \
-  --results-csv $CAPTION_CSV \
-  > logs/caption_no_prune.log 2>&1 &
-PID1=$!
+  --results-csv $CAPTION_CSV
 
+echo "  [2/4] random_r0.5 ..."
 python profile_sara.py \
   --frames $FRAMES --num-samples $N --seed $SEED \
   --task caption \
   --prune-random --prune-layers $BEST_LAYER --prune-ratio 0.5 \
   --config-tag caption_random_r0.5 \
-  --results-csv $CAPTION_CSV \
-  > logs/caption_random.log 2>&1 &
-PID2=$!
+  --results-csv $CAPTION_CSV
 
-wait $PID1 && echo "  no_prune done" || echo "  no_prune FAILED — check logs/caption_no_prune.log"
-wait $PID2 && echo "  random done"   || echo "  random FAILED — check logs/caption_random.log"
-
-# ── Batch 2: text + gaze ──────────────────────────────────
-echo "  [Batch 2] text_r0.5 + gaze_r0.5 ..."
-
+echo "  [3/4] text_r0.5 ..."
 python profile_sara.py \
   --frames $FRAMES --num-samples $N --seed $SEED \
   --task caption \
   --prune-text --prune-layers $BEST_LAYER --prune-ratio 0.5 \
   --config-tag caption_text_r0.5 \
-  --results-csv $CAPTION_CSV \
-  > logs/caption_text.log 2>&1 &
-PID3=$!
+  --results-csv $CAPTION_CSV
 
+echo "  [4/4] gaze_r0.5 ..."
 python profile_sara.py \
   --frames $FRAMES --num-samples $N --seed $SEED \
   --task caption \
   --prune-gaze --prune-layers $BEST_LAYER --prune-ratio 0.5 \
   --config-tag caption_gaze_r0.5 \
-  --results-csv $CAPTION_CSV \
-  > logs/caption_gaze.log 2>&1 &
-PID4=$!
-
-wait $PID3 && echo "  text done" || echo "  text FAILED — check logs/caption_text.log"
-wait $PID4 && echo "  gaze done" || echo "  gaze FAILED — check logs/caption_gaze.log"
+  --results-csv $CAPTION_CSV
 
 echo ""
 echo "=================================================="
@@ -83,4 +65,4 @@ echo "=================================================="
 python score_captions_sara.py --csv $CAPTION_CSV
 
 echo ""
-echo "All done. Results → $CAPTION_CSV"
+echo "All done. Results -> $CAPTION_CSV"

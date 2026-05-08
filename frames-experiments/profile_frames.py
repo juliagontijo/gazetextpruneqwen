@@ -6,15 +6,21 @@ count, but the 8-frame model sees richer temporal context → better CoT reasoni
 
 Conditions:
   4f_no_prune          — 4 frames, no pruning  (current baseline)
-  8f_no_prune          — 8 frames, no pruning  (more context, ~2× slower)
+  8f_no_prune          — 8 frames, no pruning  (more context)
   8f_text_l10_r0.5     — 8 frames, text-guided pruning at layer 10, keep 50%
   8f_gaze_l10_r0.5     — 8 frames, gaze-guided pruning at layer 10, keep 50%
+  16f_no_prune         — 16 frames, no pruning (maximum context)
+  16f_text_l10_r0.5    — 16 frames, text-guided pruning, keep 50%
+  16f_text_l10_r0.25   — 16 frames, text-guided pruning, keep 25% (aggressive iso-cost)
 
 Usage (from frames-experiments/):
-    python profile_frames.py --condition 4f_no_prune      --num-samples 30
-    python profile_frames.py --condition 8f_no_prune      --num-samples 30
-    python profile_frames.py --condition 8f_text_l10_r0.5 --num-samples 30
-    python profile_frames.py --condition 8f_gaze_l10_r0.5 --num-samples 30
+    python profile_frames.py --condition 4f_no_prune        --num-samples 90
+    python profile_frames.py --condition 8f_no_prune        --num-samples 90
+    python profile_frames.py --condition 8f_text_l10_r0.5   --num-samples 90
+    python profile_frames.py --condition 8f_gaze_l10_r0.5   --num-samples 90
+    python profile_frames.py --condition 16f_no_prune       --num-samples 90
+    python profile_frames.py --condition 16f_text_l10_r0.5  --num-samples 90
+    python profile_frames.py --condition 16f_text_l10_r0.25 --num-samples 90
 
 Or run everything via:
     bash run_frames_experiments.sh
@@ -55,6 +61,21 @@ CONDITIONS = {
         prune_layers=[10], prune_ratio=0.5, prune_alpha=0.5,
         config_tag="8f_gaze_l10_r0.5",
     ),
+    "16f_no_prune": dict(
+        n_frames=16, prune_text=False, prune_gaze=False, prune_random=False,
+        prune_layers=[10], prune_ratio=0.5, prune_alpha=0.5,
+        config_tag="16f_no_prune",
+    ),
+    "16f_text_l10_r0.5": dict(
+        n_frames=16, prune_text=True, prune_gaze=False, prune_random=False,
+        prune_layers=[10], prune_ratio=0.5, prune_alpha=0.5,
+        config_tag="16f_text_l10_r0.5",
+    ),
+    "16f_text_l10_r0.25": dict(
+        n_frames=16, prune_text=True, prune_gaze=False, prune_random=False,
+        prune_layers=[10], prune_ratio=0.25, prune_alpha=0.5,
+        config_tag="16f_text_l10_r0.25",
+    ),
 }
 
 
@@ -62,7 +83,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--condition",   choices=list(CONDITIONS), required=True,
                     help="Which experimental condition to run.")
-    ap.add_argument("--num-samples", type=int, default=30)
+    ap.add_argument("--num-samples", type=int, default=90)
     ap.add_argument("--seed",        type=int, default=42)
     ap.add_argument("--results-csv", type=Path, default=DEFAULT_CSV)
     ap.add_argument("--reset",       action="store_true",

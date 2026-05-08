@@ -297,11 +297,11 @@ def build_inputs(processor, row: dict, n_frames: int, task: str = "mcq"):
         options = row["answer_options"].split("|")
         options_str = "\n".join(o.strip() for o in options)
         prompt = (
-            f"Watch the video carefully and answer the following multiple-choice question.\n"
-            f"Think step by step about what you observe, then end your response with "
-            f"'Answer: X' where X is the letter of the correct option.\n\n"
+            f"Watch the video carefully.\n\n"
             f"Question: {row['question']}\n\n"
-            f"Options:\n{options_str}"
+            f"Options:\n{options_str}\n\n"
+            f"Think step by step about what you observe in the video, then on the last "
+            f"line write exactly: Answer: X"
         )
         sample_log = (
             f"  file:     {row['file_name']}\n"
@@ -679,8 +679,8 @@ def run_sample(
                 model,
                 prefill_inputs,
                 generation_kwargs,
-                max_new_tokens=512,
-                min_new_tokens=200,
+                max_new_tokens=700,
+                min_new_tokens=50,
             )
 
     decoder_output = decode_output(processor, inputs, generated_ids)

@@ -15,7 +15,7 @@ cd "$(dirname "$0")"
 
 RESULTS_CSV="results/sara-experiments.csv"
 JUDGE_MODEL="Qwen/Qwen2.5-7B-Instruct"
-N=100          # increase from 30 → 100
+N=90           # 30 causal + 30 spatial + 30 temporal — all unique (clip, question) pairs
 SEED=42
 FRAMES=4
 BEST_LAYER=10

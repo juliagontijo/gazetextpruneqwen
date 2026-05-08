@@ -45,13 +45,19 @@ CONDITION_ORDER = [
     "8f_no_prune",
     "8f_text_l10_r0.5",
     "8f_gaze_l10_r0.5",
+    "16f_no_prune",
+    "16f_text_l10_r0.5",
+    "16f_text_l10_r0.25",
 ]
 
 CONDITION_LABEL = {
-    "4f_no_prune":       "4f  no-prune  (baseline)",
-    "8f_no_prune":       "8f  no-prune  (upper bound)",
-    "8f_text_l10_r0.5":  "8f  text-prune r=0.5  (iso-cost)",
-    "8f_gaze_l10_r0.5":  "8f  gaze-prune r=0.5  (iso-cost)",
+    "4f_no_prune":        "4f  no-prune  (baseline)",
+    "8f_no_prune":        "8f  no-prune",
+    "8f_text_l10_r0.5":   "8f  text-prune r=0.5  (iso-cost)",
+    "8f_gaze_l10_r0.5":   "8f  gaze-prune r=0.5  (iso-cost)",
+    "16f_no_prune":       "16f no-prune",
+    "16f_text_l10_r0.5":  "16f text-prune r=0.5",
+    "16f_text_l10_r0.25": "16f text-prune r=0.25 (aggressive)",
 }
 
 
@@ -203,24 +209,28 @@ def iso_cost_check(base_rows):
                 pass
 
     base = mean(by_tag.get("4f_no_prune", []))
-    text8 = mean(by_tag.get("8f_text_l10_r0.5", []))
-    gaze8 = mean(by_tag.get("8f_gaze_l10_r0.5", []))
-
-    if not (base and (text8 or gaze8)):
+    if not base:
         return
 
+    checks = [
+        ("8f_text_l10_r0.5",   "8f  text-prune r=0.5 "),
+        ("8f_gaze_l10_r0.5",   "8f  gaze-prune r=0.5 "),
+        ("16f_no_prune",        "16f no-prune          "),
+        ("16f_text_l10_r0.5",  "16f text-prune r=0.5 "),
+        ("16f_text_l10_r0.25", "16f text-prune r=0.25"),
+    ]
+
     print("\n" + "═" * 60)
-    print("  ISO-COST CHECK (decode ms/tok)")
+    print("  ISO-COST CHECK (decode ms/tok vs 4f_no_prune)")
     print("═" * 60)
     print(f"  4f no-prune baseline : {base:.1f} ms/tok")
-    if text8:
-        ratio = text8 / base
+    for tag, label in checks:
+        val = mean(by_tag.get(tag, []))
+        if not val:
+            continue
+        ratio = val / base
         verdict = "✓ iso-cost" if 0.85 <= ratio <= 1.25 else ("faster" if ratio < 0.85 else "slower")
-        print(f"  8f text-prune r=0.5  : {text8:.1f} ms/tok  ({ratio:.2f}×  → {verdict})")
-    if gaze8:
-        ratio = gaze8 / base
-        verdict = "✓ iso-cost" if 0.85 <= ratio <= 1.25 else ("faster" if ratio < 0.85 else "slower")
-        print(f"  8f gaze-prune r=0.5  : {gaze8:.1f} ms/tok  ({ratio:.2f}×  → {verdict})")
+        print(f"  {label} : {val:.1f} ms/tok  ({ratio:.2f}×  → {verdict})")
 
 
 def main():

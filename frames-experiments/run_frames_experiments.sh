@@ -24,7 +24,7 @@ cd "$(dirname "$0")"
 
 RESULTS_CSV="results/frames-experiments.csv"
 JUDGE_MODEL="Qwen/Qwen2.5-7B-Instruct"
-N=30
+N=30    # 30 causal + 30 spatial + 30 temporal — all unique (clip, question) pairs
 SEED=42
 
 mkdir -p results
@@ -34,18 +34,20 @@ echo "  PHASE 1: Inference — all 4 conditions, N=$N"
 echo "=================================================="
 
 
+
+
 python profile_frames.py \
-  --condition 8f_no_prune \
+  --condition 16f_no_prune \
   --num-samples $N --seed $SEED \
   --results-csv $RESULTS_CSV
 
 python profile_frames.py \
-  --condition 8f_text_l10_r0.5 \
+  --condition 16f_text_l10_r0.5 \
   --num-samples $N --seed $SEED \
   --results-csv $RESULTS_CSV
 
 python profile_frames.py \
-  --condition 8f_gaze_l10_r0.5 \
+  --condition 16f_text_l10_r0.25 \
   --num-samples $N --seed $SEED \
   --results-csv $RESULTS_CSV
 

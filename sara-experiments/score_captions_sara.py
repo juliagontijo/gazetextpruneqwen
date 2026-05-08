@@ -75,7 +75,7 @@ def main():
         r["correct"] = f"{f1:.4f}"
 
     # Re-write the CSV preserving all columns
-    fieldnames = [c for c in CSV_COLUMNS if c in rows[0]]
+    fieldnames = list(rows[0].keys())
     with open(args.csv, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()

@@ -488,6 +488,8 @@ def write_csv(csv_path: Path, rows: list[dict]):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--csv",            type=Path, required=True)
+    ap.add_argument("--output-csv",     type=Path, default=None,
+                    help="Write results to a new file instead of overwriting --csv.")
     ap.add_argument("--mode",           type=str,  default="reasoning",
                     choices=["reasoning", "coverage", "preference"],
                     help="Which evaluation to run (default: reasoning).")
@@ -533,7 +535,8 @@ def main():
                         device, args.max_new_tokens, args.config_tag, args.dry_run)
 
     if not args.dry_run:
-        write_csv(args.csv, rows)
+        out_path = args.output_csv or args.csv
+        write_csv(out_path, rows)
         print_summary(rows, args.mode)
 
 

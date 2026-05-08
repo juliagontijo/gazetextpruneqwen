@@ -14,9 +14,9 @@ from collections import Counter
 from pathlib import Path
 
 HERE            = Path(__file__).parent
-NO_PRUNE_CSV    = HERE / "results" / "no-prune-results.csv"
+NO_PRUNE_CSV    = HERE / "results" / "no_prune-results.csv"
 MAIN_CSV        = HERE / "results" / "sara_experiments1.csv"
-OUT_CSV         = HERE / "results" / "sara-experiments.csv"
+OUT_CSV         = HERE / "results" / "sara_experiments.csv"
 
 
 def load(path: Path) -> list[dict]:

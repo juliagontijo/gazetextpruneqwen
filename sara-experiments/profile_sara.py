@@ -727,8 +727,8 @@ def run_sample(
                 model,
                 prefill_inputs,
                 generation_kwargs,
-                max_new_tokens=700,
-                min_new_tokens=150,
+                max_new_tokens=800,
+                min_new_tokens=200,
             )
 
     decoder_output = decode_output(processor, inputs, generated_ids)

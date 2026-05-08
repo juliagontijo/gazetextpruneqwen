@@ -295,13 +295,14 @@ def call_judge(model, tokenizer, prompt: str, device: str,
 # ── Per-mode evaluation ───────────────────────────────────────────────────────
 
 def eval_reasoning(rows, sample_lookup, narration_db, model, tokenizer,
-                   device, max_new_tokens, config_tag_filter, dry_run):
+                   device, max_new_tokens, config_tag_filter, dry_run,
+                   out_path=None, fieldnames=None, done_keys=None):
     targets = [
         r for r in rows
         if r.get("cot_output", "").strip()
-        and r.get("llm_judge_score", "").strip() == ""
         and r.get("qa_type", "") in ("causal", "spatial", "temporal")
         and (not config_tag_filter or config_tag_filter in r["config_tag"])
+        and (done_keys is None or (r["config_tag"], r["sample_idx"]) not in done_keys)
     ]
     print(f"[reasoning] rows to evaluate: {len(targets)}")
     if dry_run:
@@ -333,16 +334,19 @@ def eval_reasoning(rows, sample_lookup, narration_db, model, tokenizer,
             print(f"    → score={score}  {reasoning[:80]!r}")
             row["llm_judge_score"]    = str(score)
             row["llm_judge_reasoning"] = reasoning[:500]
+        if out_path and fieldnames:
+            append_output_row(out_path, row, fieldnames)
 
 
 def eval_coverage(rows, sample_lookup, narration_db, model, tokenizer,
-                  device, max_new_tokens, config_tag_filter, dry_run):
+                  device, max_new_tokens, config_tag_filter, dry_run,
+                  out_path=None, fieldnames=None, done_keys=None):
     targets = [
         r for r in rows
         if r.get("cot_output", "").strip()
-        and r.get("llm_coverage_final", "").strip() == ""
         and r.get("qa_type", "") in ("causal", "spatial", "temporal")
         and (not config_tag_filter or config_tag_filter in r["config_tag"])
+        and (done_keys is None or (r["config_tag"], r["sample_idx"]) not in done_keys)
     ]
     print(f"[coverage] rows to evaluate: {len(targets)}")
     if dry_run:
@@ -371,6 +375,8 @@ def eval_coverage(rows, sample_lookup, narration_db, model, tokenizer,
         row["llm_coverage_logic"]     = str(s_logic) if s_logic is not None else ""
         row["llm_coverage_final"]     = str(s_final) if s_final is not None else ""
         row["llm_coverage_breakdown"] = breakdown[:600]
+        if out_path and fieldnames:
+            append_output_row(out_path, row, fieldnames)
 
 
 def eval_preference(rows, sample_lookup, narration_db, model, tokenizer,
@@ -467,19 +473,51 @@ def print_summary(rows, mode):
 
 # ── CSV I/O ───────────────────────────────────────────────────────────────────
 
+def _output_fieldnames(rows: list[dict]) -> list[str]:
+    cols = list(rows[0].keys()) if rows else []
+    for col in ALL_EVAL_COLS:
+        if col not in cols:
+            cols.append(col)
+    return cols
+
+
+def load_done_keys(out_path: Path, mode: str) -> set[tuple]:
+    """Return set of (config_tag, sample_idx) already scored in the output CSV."""
+    if not out_path.exists():
+        return set()
+    check_col = {
+        "reasoning":  "llm_judge_score",
+        "coverage":   "llm_coverage_final",
+        "preference": "llm_pref_winner",
+    }[mode]
+    done = set()
+    with open(out_path, newline="") as f:
+        for r in csv.DictReader(f):
+            if r.get(check_col, "").strip():
+                done.add((r["config_tag"], r["sample_idx"]))
+    return done
+
+
+def append_output_row(out_path: Path, row: dict, fieldnames: list[str]):
+    is_new = not out_path.exists()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(out_path, "a", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        if is_new:
+            writer.writeheader()
+        writer.writerow({k: row.get(k, "") for k in fieldnames})
+
+
 def write_csv(csv_path: Path, rows: list[dict]):
+    """Final full rewrite — called at end as a safety net."""
     if not rows:
         return
-    # Preserve existing columns; append new eval columns if missing
-    existing_cols = list(rows[0].keys())
-    for col in ALL_EVAL_COLS:
-        if col not in existing_cols:
-            existing_cols.append(col)
+    fieldnames = _output_fieldnames(rows)
     with open(csv_path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=existing_cols)
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         for r in rows:
-            writer.writerow({k: r.get(k, "") for k in existing_cols})
+            writer.writerow({k: r.get(k, "") for k in fieldnames})
     print(f"Written → {csv_path}")
 
 

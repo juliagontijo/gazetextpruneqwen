@@ -297,11 +297,13 @@ def build_inputs(processor, row: dict, n_frames: int, task: str = "mcq"):
         options = row["answer_options"].split("|")
         options_str = "\n".join(o.strip() for o in options)
         prompt = (
-            f"Watch the video carefully.\n\n"
+            f"You are watching a first-person (egocentric) video. "
+            f"The camera wearer is performing everyday activities.\n\n"
             f"Question: {row['question']}\n\n"
             f"Options:\n{options_str}\n\n"
-            f"Think step by step about what you observe in the video, then on the last "
-            f"line write exactly: Answer: X"
+            f"First describe what you observe in the video. "
+            f"Then reason step by step about which option best matches what you saw. "
+            f"Finish with 'Answer: X' where X is the letter of your chosen option."
         )
         sample_log = (
             f"  file:     {row['file_name']}\n"

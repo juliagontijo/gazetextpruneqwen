@@ -1,0 +1,166 @@
+{
+  "text_span": "<|vision_end|>Describe in detail: what is the person doing with their hands? <|im_end|>\n<|im_start|>assistant\n",
+  "top_k_printed": 20,
+  "entries": [
+    {
+      "seq_index": 1473,
+      "token_id": 151653,
+      "token": "<|vision_end|>",
+      "piece": "<|vision_end|>",
+      "score": 0.0,
+      "is_rater": false
+    },
+    {
+      "seq_index": 1474,
+      "token_id": 74785,
+      "token": "Describe",
+      "piece": "Describe",
+      "score": 0.0,
+      "is_rater": false
+    },
+    {
+      "seq_index": 1475,
+      "token_id": 304,
+      "token": "Ġin",
+      "piece": " in",
+      "score": 0.3966759443283081,
+      "is_rater": true
+    },
+    {
+      "seq_index": 1476,
+      "token_id": 7716,
+      "token": "Ġdetail",
+      "piece": " detail",
+      "score": 0.0,
+      "is_rater": false
+    },
+    {
+      "seq_index": 1477,
+      "token_id": 25,
+      "token": ":",
+      "piece": ":",
+      "score": 0.0006858710548840463,
+      "is_rater": false
+    },
+    {
+      "seq_index": 1478,
+      "token_id": 1128,
+      "token": "Ġwhat",
+      "piece": " what",
+      "score": 0.0,
+      "is_rater": false
+    },
+    {
+      "seq_index": 1479,
+      "token_id": 374,
+      "token": "Ġis",
+      "piece": " is",
+      "score": 0.002057613106444478,
+      "is_rater": false
+    },
+    {
+      "seq_index": 1480,
+      "token_id": 279,
+      "token": "Ġthe",
+      "piece": " the",
+      "score": 0.0,
+      "is_rater": false
+    },
+    {
+      "seq_index": 1481,
+      "token_id": 1697,
+      "token": "Ġperson",
+      "piece": " person",
+      "score": 0.006172839552164078,
+      "is_rater": false
+    },
+    {
+      "seq_index": 1482,
+      "token_id": 3730,
+      "token": "Ġdoing",
+      "piece": " doing",
+      "score": 0.0,
+      "is_rater": false
+    },
+    {
+      "seq_index": 1483,
+      "token_id": 448,
+      "token": "Ġwith",
+      "piece": " with",
+      "score": 0.0,
+      "is_rater": false
+    },
+    {
+      "seq_index": 1484,
+      "token_id": 862,
+      "token": "Ġtheir",
+      "piece": " their",
+      "score": 0.5693252086639404,
+      "is_rater": true
+    },
+    {
+      "seq_index": 1485,
+      "token_id": 6078,
+      "token": "Ġhands",
+      "piece": " hands",
+      "score": 0.0054869684390723705,
+      "is_rater": false
+    },
+    {
+      "seq_index": 1486,
+      "token_id": 30,
+      "token": "?",
+      "piece": "?",
+      "score": 0.0,
+      "is_rater": false
+    },
+    {
+      "seq_index": 1487,
+      "token_id": 220,
+      "token": "Ġ",
+      "piece": " ",
+      "score": 0.0,
+      "is_rater": false
+    },
+    {
+      "seq_index": 1488,
+      "token_id": 151645,
+      "token": "<|im_end|>",
+      "piece": "<|im_end|>",
+      "score": 0.018223822116851807,
+      "is_rater": false
+    },
+    {
+      "seq_index": 1489,
+      "token_id": 198,
+      "token": "Ċ",
+      "piece": "\n",
+      "score": 0.0006858710548840463,
+      "is_rater": false
+    },
+    {
+      "seq_index": 1490,
+      "token_id": 151644,
+      "token": "<|im_start|>",
+      "piece": "<|im_start|>",
+      "score": 0.0,
+      "is_rater": false
+    },
+    {
+      "seq_index": 1491,
+      "token_id": 77091,
+      "token": "assistant",
+      "piece": "assistant",
+      "score": 0.0,
+      "is_rater": false
+    },
+    {
+      "seq_index": 1492,
+      "token_id": 198,
+      "token": "Ċ",
+      "piece": "\n",
+      "score": 0.0006858710548840463,
+      "is_rater": false
+    }
+  ]
+}

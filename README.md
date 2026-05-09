@@ -2,7 +2,7 @@
 
 ## Overview
 
-This project implements gaze-based text pruning using Qwen2-VL models for efficient video captioning and question answering on the EgoGazeVQA dataset. It focuses on pruning irrelevant text tokens based on gaze data to improve model performance and reduce computational overhead.
+This project implements gaze-based text pruning using Qwen2-VL models for efficient video captioning and question answering on the EgoGazeVQA dataset and serves as an exploration between its efficiency and the models reasoning wuality tradeoffs. It focuses on pruning irrelevant text tokens based on gaze data to improve model performance and reduce computational overhead.
 
 ## Features
 

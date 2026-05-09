@@ -47,26 +47,34 @@ TEXT_RATER_LOG_PATH = Path(__file__).parent / "text_raters.json"
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
-def mps_sync():
-    if torch.backends.mps.is_available():
+def device_sync():
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    elif torch.backends.mps.is_available():
         torch.mps.synchronize()
 
 
-def mps_allocated_mb() -> float:
+def device_allocated_mb() -> float:
+    if torch.cuda.is_available():
+        return torch.cuda.memory_allocated() / 1e6
     if torch.backends.mps.is_available():
         return torch.mps.current_allocated_memory() / 1e6
     return 0.0
 
 
+mps_sync = device_sync
+mps_allocated_mb = device_allocated_mb
+
+
 @contextlib.contextmanager
 def timed_block(label: str, results: dict):
-    mps_sync()
-    mem_before = mps_allocated_mb()
+    device_sync()
+    mem_before = device_allocated_mb()
     t0 = time.perf_counter()
     yield
-    mps_sync()
+    device_sync()
     elapsed = time.perf_counter() - t0
-    mem_after = mps_allocated_mb()
+    mem_after = device_allocated_mb()
     results[label] = {
         "time_s": elapsed,
         "mem_delta_mb": mem_after - mem_before,
@@ -304,7 +312,12 @@ def build_inputs(processor, n_frames: int):
         padding=True,
         return_tensors="pt",
     )
-    device = "mps" if torch.backends.mps.is_available() else "cpu"
+    if torch.cuda.is_available():
+        device = "cuda"
+    elif torch.backends.mps.is_available():
+        device = "mps"
+    else:
+        device = "cpu"
     inputs = inputs.to(device)
 
     n_visual = (inputs.pixel_values_videos is not None and
@@ -337,14 +350,14 @@ class ComponentProfiler:
         state = {}
 
         def pre_hook(module, args):
-            mps_sync()
-            state["mem_before"] = mps_allocated_mb()
+            device_sync()
+            state["mem_before"] = device_allocated_mb()
             state["t0"] = time.perf_counter()
 
         def post_hook(module, args, output):
-            mps_sync()
+            device_sync()
             elapsed = time.perf_counter() - state["t0"]
-            mem_delta = mps_allocated_mb() - state["mem_before"]
+            mem_delta = device_allocated_mb() - state["mem_before"]
             self._timings.setdefault(name, []).append(elapsed)
             self._timings.setdefault(f"{name}_mem_mb", []).append(mem_delta)
 
@@ -355,14 +368,14 @@ class ComponentProfiler:
         state = {}
 
         def pre_hook(module, args):
-            mps_sync()
-            state["mem_before"] = mps_allocated_mb()
+            device_sync()
+            state["mem_before"] = device_allocated_mb()
             state["t0"] = time.perf_counter()
 
         def post_hook(module, args, output):
-            mps_sync()
+            device_sync()
             elapsed = time.perf_counter() - state["t0"]
-            mem_delta = mps_allocated_mb() - state["mem_before"]
+            mem_delta = device_allocated_mb() - state["mem_before"]
             key = "prefill" if self._decoder_call_count == 0 else "decode"
             self._decoder_call_count += 1
             self._timings.setdefault(key, []).append(elapsed)
@@ -1084,7 +1097,12 @@ def main(
     save_vis: bool = False,
     save_text_raters: bool = False,
 ):
-    device = "mps" if torch.backends.mps.is_available() else "cpu"
+    if torch.cuda.is_available():
+        device = "cuda"
+    elif torch.backends.mps.is_available():
+        device = "mps"
+    else:
+        device = "cpu"
     print(f"Device: {device}  |  torch {torch.__version__}  |  frames: {n_frames}")
 
     results = {}
@@ -1165,7 +1183,7 @@ def main(
             )
         else:
             _ = model.generate(**inputs, max_new_tokens=16, min_new_tokens=8)
-    mps_sync()
+    device_sync()
     print("Warmup done.\n")
 
     profiler = ComponentProfiler(model)

@@ -18,6 +18,8 @@
 # limitations under the License.
 """PyTorch Qwen2-VL model."""
 
+from __future__ import annotations  # enables X | Y union syntax on Python 3.9
+
 import itertools
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -28,35 +30,198 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn import LayerNorm
 
-from ... import initialization as init
+import torch.nn.init as init
+# ── Stable imports (present in all supported transformers versions) ──────────
 from ...activations import ACT2FN
 from ...cache_utils import Cache, DynamicCache
 from ...generation import GenerationMixin
-from ...integrations import use_kernel_forward_from_hub
-from ...masking_utils import create_causal_mask, create_sliding_window_causal_mask
-from ...modeling_flash_attention_utils import FlashAttentionKwargs
-from ...modeling_layers import GradientCheckpointingLayer
 from ...modeling_outputs import BaseModelOutputWithPast, BaseModelOutputWithPooling, ModelOutput
-from ...modeling_rope_utils import ROPE_INIT_FUNCTIONS
-from ...modeling_utils import ALL_ATTENTION_FUNCTIONS, PreTrainedModel
-from ...processing_utils import Unpack
-from ...utils import (
-    TransformersKwargs,
-    auto_docstring,
-    can_return_tuple,
-    logging,
-    torch_compilable_check,
-)
-from ...utils.generic import (
-    is_flash_attention_requested,
-    maybe_autocast,
-    merge_with_config_defaults,
-)
-from ...utils.output_capturing import capture_outputs
+from ...modeling_utils import PreTrainedModel
+from ...utils import logging
+
+# ── Imports added in transformers ~4.44-4.50; no-op fallbacks keep older ─────
+# versions working.  Flash attention is never used here (attn_implementation=
+# "eager"), so every fallback is behaviourally identical to the real symbol.
+
+try:
+    from ...integrations import use_kernel_forward_from_hub
+except (ImportError, AttributeError):
+    def use_kernel_forward_from_hub(_name):       # decorator → identity
+        return lambda cls: cls
+
+try:
+    from ...masking_utils import create_causal_mask as _ccm_raw, \
+                                 create_sliding_window_causal_mask as _cswcm_raw
+    import inspect as _inspect
+    _ccm_params   = set(_inspect.signature(_ccm_raw).parameters)
+    _cswcm_params = set(_inspect.signature(_cswcm_raw).parameters)
+    # Detect whether this version's API accepts 'inputs_embeds' (plural, ≥4.51) or
+    # 'input_embeds' (singular, e.g. 4.57.x) — both are the new callable API.
+    # Fall back to None only if neither form is present (truly old/missing API).
+    _CCM_NEW_API   = "inputs_embeds" in _ccm_params or "input_embeds" in _ccm_params
+    _CSWCM_NEW_API = "inputs_embeds" in _cswcm_params or "input_embeds" in _cswcm_params
+    def _remap_embeds(kwargs, params):
+        # Normalize inputs_embeds↔input_embeds so the right key reaches the callee.
+        kw = dict(kwargs)
+        if "input_embeds" in params and "inputs_embeds" in kw:
+            kw["input_embeds"] = kw.pop("inputs_embeds")
+        elif "inputs_embeds" in params and "input_embeds" in kw:
+            kw["inputs_embeds"] = kw.pop("input_embeds")
+        return {k: v for k, v in kw.items() if k in params}
+    def create_causal_mask(**kwargs):
+        if _CCM_NEW_API:
+            return _ccm_raw(**_remap_embeds(kwargs, _ccm_params))
+        return None
+    def create_sliding_window_causal_mask(**kwargs):
+        if _CSWCM_NEW_API:
+            return _cswcm_raw(**_remap_embeds(kwargs, _cswcm_params))
+        return None
+except ImportError:
+    def create_causal_mask(**kwargs):
+        return None
+    def create_sliding_window_causal_mask(**kwargs):
+        return None
+
+try:
+    from ...modeling_flash_attention_utils import FlashAttentionKwargs
+except ImportError:
+    FlashAttentionKwargs = dict                   # type: ignore[misc,assignment]
+
+try:
+    from ...modeling_layers import GradientCheckpointingLayer
+except ImportError:
+    GradientCheckpointingLayer = nn.Module        # gradient-ckpt just won't activate
+
+try:
+    from ...modeling_rope_utils import ROPE_INIT_FUNCTIONS
+except ImportError:
+    ROPE_INIT_FUNCTIONS = {}
+
+try:
+    from ...modeling_utils import ALL_ATTENTION_FUNCTIONS as _attn_raw
+    if hasattr(_attn_raw, 'get_interface'):
+        ALL_ATTENTION_FUNCTIONS = _attn_raw
+    else:
+        # Older transformers: AttentionInterface exists but lacks get_interface — wrap it.
+        class _AttnWrapper:
+            def __init__(self, orig):
+                self._orig = orig
+            def get_interface(self, impl, fallback):
+                try:
+                    return self._orig[impl]
+                except (KeyError, TypeError):
+                    return fallback
+            def __getitem__(self, key):
+                return self._orig[key]
+            def __contains__(self, key):
+                return key in self._orig
+        ALL_ATTENTION_FUNCTIONS = _AttnWrapper(_attn_raw)
+except (ImportError, AttributeError):
+    class _AttnRegistry(dict):
+        def get_interface(self, impl, fallback):
+            return self.get(impl, fallback)
+    ALL_ATTENTION_FUNCTIONS = _AttnRegistry()
+
+try:
+    from ...processing_utils import Unpack
+except ImportError:
+    try:
+        from typing import Unpack                 # Python 3.11+
+    except ImportError:
+        try:
+            from typing_extensions import Unpack
+        except ImportError:
+            Unpack = None                         # type: ignore[assignment,misc]
+
+try:
+    from ...utils import TransformersKwargs, can_return_tuple
+    from ...utils import auto_docstring as _auto_docstring_real
+    def auto_docstring(*args, **kwargs):          # wrap to suppress undoc-param warnings
+        if len(args) == 1 and callable(args[0]) and not kwargs:
+            return args[0]
+        return lambda fn: fn
+except ImportError:
+    TransformersKwargs = dict                     # type: ignore[misc,assignment]
+    def auto_docstring(*args, **kwargs):          # decorator → identity
+        if len(args) == 1 and callable(args[0]) and not kwargs:
+            return args[0]
+        return lambda fn: fn
+    def can_return_tuple(fn):
+        return fn
+
+try:
+    from ...utils import torch_compilable_check
+except ImportError:
+    def torch_compilable_check(condition, message=""):
+        if not condition:
+            raise ValueError(message)
+
+# ── New in transformers 4.51 ──────────────────────────────────────────────────
+try:
+    from ...utils.generic import (
+        is_flash_attention_requested,
+        maybe_autocast,
+        merge_with_config_defaults,
+    )
+except ImportError:
+    import contextlib as _contextlib
+
+    def is_flash_attention_requested(config) -> bool:
+        # With attn_implementation="eager" this always returns False.
+        return getattr(config, "_attn_implementation", "eager") == "flash_attention_2"
+
+    @_contextlib.contextmanager
+    def maybe_autocast(device_type="cpu", enabled=True, **kwargs):
+        # Used only with enabled=False (force float32 for RoPE) — equivalent no-op.
+        with torch.autocast(device_type=device_type, enabled=enabled):
+            yield
+
+    def merge_with_config_defaults(fn):          # decorator → identity
+        return fn
+
+try:
+    from ...utils.output_capturing import capture_outputs
+except ImportError:
+    def capture_outputs(fn):                     # decorator → identity
+        return fn
 from .configuration_qwen2_vl import Qwen2VLConfig, Qwen2VLTextConfig, Qwen2VLVisionConfig
 
 
 logger = logging.get_logger(__name__)
+
+
+def _patch_config_compat(config) -> None:
+    """
+    Back-fill attributes added in transformers 4.51 that older installs lack.
+    Mutates config in-place; safe to call multiple times (idempotent).
+    """
+    # ── rope_parameters ───────────────────────────────────────────────────────
+    if not (hasattr(config, "rope_parameters") and isinstance(config.rope_parameters, dict)):
+        rope_theta = getattr(config, "rope_theta", 1000000.0)
+        rope_scaling = getattr(config, "rope_scaling", None) or {}
+
+        rope_type = rope_scaling.get("type", rope_scaling.get("rope_type", "default"))
+
+        # mrope_section: try rope_scaling dict, then direct attr, then derive from head_dim
+        mrope_section = rope_scaling.get("mrope_section") or getattr(config, "mrope_section", None)
+        if mrope_section is None:
+            hidden_size = getattr(config, "hidden_size", 1536)
+            num_heads   = getattr(config, "num_attention_heads", 12)
+            head_dim    = hidden_size // num_heads
+            t           = head_dim // 4
+            hw          = (head_dim - t) // 2
+            mrope_section = [t, hw, hw]
+
+        params = {"rope_type": rope_type, "rope_theta": rope_theta, "mrope_section": mrope_section}
+        factor = rope_scaling.get("factor", 1.0)
+        if rope_type != "default":
+            params["factor"] = factor
+        config.rope_parameters = params
+
+    # ── layer_types ───────────────────────────────────────────────────────────
+    if not hasattr(config, "layer_types"):
+        n = getattr(config, "num_hidden_layers", 28)
+        config.layer_types = ["full_attention"] * n
 
 
 @dataclass
@@ -664,6 +829,7 @@ class Qwen2VLDecoderLayer(GradientCheckpointingLayer):
 
 @auto_docstring
 class Qwen2VLPreTrainedModel(PreTrainedModel):
+    config_class = Qwen2VLConfig
     config: Qwen2VLConfig
     base_model_prefix = "model"
     input_modalities = ("image", "video", "text")
@@ -680,11 +846,12 @@ class Qwen2VLPreTrainedModel(PreTrainedModel):
         super()._init_weights(module)
         if isinstance(module, VisionRotaryEmbedding):
             inv_freq = 1.0 / (module.theta ** (torch.arange(0, module.dim, 2, dtype=torch.float) / module.dim))
-            init.copy_(module.inv_freq, inv_freq)
+            module.inv_freq.copy_(inv_freq)
 
 
 @auto_docstring
 class Qwen2VisionTransformerPretrainedModel(Qwen2VLPreTrainedModel):
+    config_class = Qwen2VLVisionConfig
     config: Qwen2VLVisionConfig
     input_modalities = ("image", "video")
     _no_split_modules = ["Qwen2VLVisionBlock"]
@@ -797,6 +964,7 @@ class Qwen2VisionTransformerPretrainedModel(Qwen2VLPreTrainedModel):
 
 @auto_docstring
 class Qwen2VLTextModel(Qwen2VLPreTrainedModel):
+    config_class = Qwen2VLTextConfig
     config: Qwen2VLTextConfig
     input_modalities = ("text",)
     _can_record_outputs = {
@@ -805,6 +973,7 @@ class Qwen2VLTextModel(Qwen2VLPreTrainedModel):
     }
 
     def __init__(self, config: Qwen2VLTextConfig):
+        _patch_config_compat(config)
         super().__init__(config)
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
@@ -847,7 +1016,10 @@ class Qwen2VLTextModel(Qwen2VLPreTrainedModel):
 
         # torch.jit.trace() doesn't support cache objects in the output
         if use_cache and past_key_values is None and not torch.jit.is_tracing():
-            past_key_values = DynamicCache(config=self.config)
+            try:
+                past_key_values = DynamicCache(config=self.config)
+            except TypeError:
+                past_key_values = DynamicCache()
 
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids)
@@ -880,12 +1052,19 @@ class Qwen2VLTextModel(Qwen2VLPreTrainedModel):
         # It may already have been prepared by e.g. `generate`
         if not isinstance(causal_mask_mapping := attention_mask, dict):
             # Prepare mask arguments
+            _past_len = past_key_values.get_seq_length() if past_key_values is not None else 0
+            _seq_len  = inputs_embeds.shape[1]
+            _cache_position = torch.arange(
+                _past_len, _past_len + _seq_len,
+                dtype=torch.long, device=inputs_embeds.device,
+            )
             mask_kwargs = {
                 "config": self.config,
                 "inputs_embeds": inputs_embeds,
                 "attention_mask": attention_mask,
                 "past_key_values": past_key_values,
                 "position_ids": text_position_ids,
+                "cache_position": _cache_position,
             }
             # Create the masks
             causal_mask_mapping = {
@@ -896,6 +1075,22 @@ class Qwen2VLTextModel(Qwen2VLPreTrainedModel):
                 causal_mask_mapping["sliding_attention"] = create_sliding_window_causal_mask(**mask_kwargs)
 
         hidden_states = inputs_embeds
+
+        # Fallback for older transformers where create_causal_mask() returns None.
+        # Without a causal mask during prefill, every token attends to all future tokens,
+        # corrupting the KV cache and producing garbage / repetitive decode output.
+        if causal_mask_mapping.get("full_attention") is None:
+            q_len = hidden_states.shape[1]
+            past_len = past_key_values.get_seq_length() if past_key_values is not None else 0
+            if q_len > 1:  # decode steps (q_len==1) need no mask
+                kv_len = q_len + past_len
+                causal = torch.full(
+                    (q_len, kv_len), float("-inf"),
+                    dtype=hidden_states.dtype, device=hidden_states.device,
+                )
+                causal = torch.triu(causal, diagonal=past_len + 1)
+                causal_mask_mapping["full_attention"] = causal[None, None, :, :]  # [1, 1, q_len, kv_len]
+
         position_embeddings = self.rotary_emb(hidden_states, position_ids)
 
         ## ---- PRUNING SETUP ----
@@ -1843,6 +2038,43 @@ class Qwen2VLForConditionalGeneration(Qwen2VLPreTrainedModel, GenerationMixin):
         if not is_first_iteration and use_cache:
             model_inputs["pixel_values"] = None
             model_inputs["pixel_values_videos"] = None
+
+        # ── Older-transformers compatibility ────────────────────────────────────
+        # In transformers ≥ 4.51, _prepare_position_ids_for_generation() is called
+        # by the generation loop before each forward pass and updates position_ids to
+        # a fresh single-token decode position.  In older versions that method is
+        # never invoked, so model_inputs["position_ids"] still contains the stale
+        # full-prefill tensor [3, B, seq_len].
+        #
+        # Inside Qwen2VLRotaryEmbedding.forward that yields cos/sin of shape
+        # [3, B, seq_len, head_dim].  The single decode key [B, H, 1, head_dim]
+        # then broadcasts against [B, 1, seq_len, head_dim] → becomes
+        # [B, H, seq_len, head_dim].  The cache stores seq_len new keys but only
+        # 1 new value → key/value seq-len mismatch → RuntimeError at matmul.
+        #
+        # Fix: when a decode step is detected (past cache non-empty) and the
+        # position_ids in model_inputs is a full-sequence 3-D tensor that doesn't
+        # match the actual query length, recompute a single-token position using the
+        # stored rope_deltas (set during prefill by compute_3d_position_ids).
+        if past_key_values is not None:
+            try:
+                past_length = past_key_values.get_seq_length()
+            except Exception:
+                past_length = 0
+            if past_length > 0:
+                pos = model_inputs.get("position_ids")
+                q_len = input_ids.shape[-1]
+                if pos is not None and pos.ndim == 3 and pos.shape[-1] != q_len:
+                    rope_deltas = getattr(self.model, "rope_deltas", None)
+                    dev = input_ids.device
+                    # Sequential text position of the new decode token
+                    text_pos = torch.tensor([[past_length]], dtype=torch.long, device=dev)
+                    if rope_deltas is not None:
+                        # [1, B, 1] — same shape returned by _prepare_position_ids_for_generation
+                        model_inputs["position_ids"] = text_pos[None, ...] + rope_deltas.to(dev)
+                    else:
+                        # Fallback: replicate 1-D position across all 3 M-RoPE dimensions
+                        model_inputs["position_ids"] = text_pos[None, ...].expand(3, -1, -1)
 
         return model_inputs
 

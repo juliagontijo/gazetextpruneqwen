@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import argparse
 import contextlib
 import csv
@@ -65,6 +67,11 @@ CSV_COLUMNS = [
     "correct_answer",
     "predicted_answer",
     "correct",
+    "cot_text",
+    "narration_gt",
+    "cot_coverage",
+    "reasoning_score",
+    "reasoning_explanation",
 ]
 
 
@@ -81,26 +88,35 @@ def load_forked_qwen2vl_class():
 Qwen2VLForConditionalGeneration = load_forked_qwen2vl_class()
 
 
-def mps_sync():
-    if torch.backends.mps.is_available():
+def device_sync():
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    elif torch.backends.mps.is_available():
         torch.mps.synchronize()
 
 
-def mps_allocated_mb() -> float:
+def device_allocated_mb() -> float:
+    if torch.cuda.is_available():
+        return torch.cuda.memory_allocated() / 1e6
     if torch.backends.mps.is_available():
         return torch.mps.current_allocated_memory() / 1e6
     return 0.0
 
 
+# Keep old names as aliases so any external callers still work.
+mps_sync = device_sync
+mps_allocated_mb = device_allocated_mb
+
+
 @contextlib.contextmanager
 def timed_block(label: str, results: dict):
-    mps_sync()
-    mem_before = mps_allocated_mb()
+    device_sync()
+    mem_before = device_allocated_mb()
     t0 = time.perf_counter()
     yield
-    mps_sync()
+    device_sync()
     elapsed = time.perf_counter() - t0
-    mem_after = mps_allocated_mb()
+    mem_after = device_allocated_mb()
     results[label] = {
         "time_s": elapsed,
         "mem_delta_mb": mem_after - mem_before,
@@ -314,7 +330,12 @@ def build_inputs(processor, row: dict, n_frames: int, task: str = "mcq"):
         padding=True,
         return_tensors="pt",
     )
-    device = "mps" if torch.backends.mps.is_available() else "cpu"
+    if torch.cuda.is_available():
+        device = "cuda"
+    elif torch.backends.mps.is_available():
+        device = "mps"
+    else:
+        device = "cpu"
     inputs = inputs.to(device)
 
     return inputs, sample_log, frame_gaze, frames
@@ -428,7 +449,13 @@ def extract_video_embeds(model, inputs):
 def build_prefill_inputs(model, inputs, video_embeds=None):
     input_ids = inputs.input_ids
     attention_mask = inputs.attention_mask
-    mm_token_type_ids = inputs.mm_token_type_ids
+    mm_token_type_ids = getattr(inputs, "mm_token_type_ids", None)
+    if mm_token_type_ids is None:
+        # Older processor doesn't return mm_token_type_ids — reconstruct from input_ids.
+        # Convention: 0=text, 1=image token, 2=video token.
+        mm_token_type_ids = torch.zeros_like(input_ids)
+        mm_token_type_ids[input_ids == model.config.image_token_id] = 1
+        mm_token_type_ids[input_ids == model.config.video_token_id] = 2
     image_grid_thw = getattr(inputs, "image_grid_thw", None)
     video_grid_thw = getattr(inputs, "video_grid_thw", None)
 
@@ -463,7 +490,7 @@ def build_prefill_inputs(model, inputs, video_embeds=None):
     }
 
 
-def run_decoder_only_generate(model, prefill_inputs, generation_kwargs, max_new_tokens, min_new_tokens):
+def run_decoder_only_generate(model, prefill_inputs, generation_kwargs, max_new_tokens):
     return model.generate(
         input_ids=prefill_inputs["input_ids"],
         inputs_embeds=prefill_inputs["inputs_embeds"],
@@ -474,7 +501,6 @@ def run_decoder_only_generate(model, prefill_inputs, generation_kwargs, max_new_
         video_grid_thw=prefill_inputs["video_grid_thw"],
         use_cache=True,
         max_new_tokens=max_new_tokens,
-        min_new_tokens=min_new_tokens,
         **generation_kwargs,
     )
 
@@ -660,6 +686,15 @@ def run_sample(
 
     prefill_inputs = build_prefill_inputs(model, inputs, video_embeds=video_embeds)
 
+    # Qwen2-VL ends responses with <|im_end|>; include both it and the
+    # base eos_token so generate() stops naturally rather than running to
+    # max_new_tokens every time.
+    eos_ids = list({
+        processor.tokenizer.eos_token_id,
+        processor.tokenizer.convert_tokens_to_ids("<|im_end|>"),
+    })
+    generation_kwargs["eos_token_id"] = eos_ids
+
     with torch.inference_mode():
         with timed_block("decode", results):
             generated_ids = run_decoder_only_generate(
@@ -667,20 +702,22 @@ def run_sample(
                 prefill_inputs,
                 generation_kwargs,
                 max_new_tokens=512,
-                min_new_tokens=200,
             )
 
     decoder_output  = decode_output(processor, inputs, generated_ids)
+    narration_gt = build_caption_ground_truth(frame_gaze, file_name=row["file_name"])
     if task == "caption":
-        # Store full output as prediction; ground truth = concatenated narrations.
-        # Quality scoring (BERTScore) is computed offline by score_captions.py.
         predicted_answer = decoder_output.strip().replace("\n", " ")
-        correct_answer   = build_caption_ground_truth(frame_gaze, file_name=row["file_name"])
-        is_correct       = None  # filled in offline
+        correct_answer   = narration_gt
+        is_correct       = None  # filled offline by score_captions.py
+        cot_text         = ""    # caption task has no CoT format
     else:
         predicted_answer = parse_answer(decoder_output)
         correct_answer   = row["correct_answer"].strip()
         is_correct       = int(predicted_answer == correct_answer) if predicted_answer else None
+        # Extract chain-of-thought: everything before the final "Answer: X"
+        answer_pos = decoder_output.rfind("Answer:")
+        cot_text = decoder_output[:answer_pos].strip() if answer_pos != -1 else decoder_output.strip()
 
     tokens_generated     = generated_ids.shape[1] - inputs.input_ids.shape[1]
     decode_s             = results["decode"]["time_s"]
@@ -737,6 +774,9 @@ def run_sample(
         "correct_answer":        correct_answer,
         "predicted_answer":      predicted_answer or "",
         "correct":               is_correct if is_correct is not None else "",
+        "cot_text":              cot_text.replace("\n", " "),
+        "narration_gt":          narration_gt.replace("\n", " "),
+        "cot_coverage":          "",  # filled offline by score_cot.py
     }
     # stash for markdown (not written to CSV)
     csv_row["_decoder_output"]  = decoder_output
@@ -856,7 +896,12 @@ def main(
     results_csv: Path | None = None,
     save_viz: bool = False,
 ):
-    device = "mps" if torch.backends.mps.is_available() else "cpu"
+    if torch.cuda.is_available():
+        device = "cuda"
+    elif torch.backends.mps.is_available():
+        device = "mps"
+    else:
+        device = "cpu"
     prune_layers = prune_layers or [27]
 
     # Auto-generate config_tag if not provided
@@ -885,26 +930,26 @@ def main(
     print(f"{'─'*60}")
 
     # ── Load model ────────────────────────────────────────────────────────────
-    # Brief pause to let the OS reclaim MPS memory from any previous process
-    # that may not have fully released it yet.
     if torch.backends.mps.is_available():
         import time as _time
         _time.sleep(5)
         torch.mps.empty_cache()
+    elif torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
     t_load = time.perf_counter()
     model = Qwen2VLForConditionalGeneration.from_pretrained(
         MODEL_ID,
-        torch_dtype=torch.bfloat16,
-        device_map={"": device},
+        dtype=torch.bfloat16,
         attn_implementation="eager",
     )
+    model = model.to(device)
     model.eval()
     processor = AutoProcessor.from_pretrained(MODEL_ID)
-    mps_sync()
+    device_sync()
     load_s = time.perf_counter() - t_load
 
-    mem_after_load = mps_allocated_mb()
+    mem_after_load = device_allocated_mb()
     print(f"Model loaded in {load_s:.2f}s  ({mem_after_load:.0f} MB)")
 
     FULL_LOAD_MB = 4300  # full bfloat16 load = ~4418 MB; abort if significantly below
@@ -933,14 +978,19 @@ def main(
         generation_kwargs_warmup["gaze_scores"] = compute_gaze_scores(
             warmup_frame_gaze, warmup_inputs.video_grid_thw, device=device
         )
+    warmup_eos = list({
+        processor.tokenizer.eos_token_id,
+        processor.tokenizer.convert_tokens_to_ids("<|im_end|>"),
+    })
     with torch.inference_mode():
         _ = model.generate(
             **warmup_inputs,
             use_cache=True,
             max_new_tokens=8,
+            eos_token_id=warmup_eos,
             **generation_kwargs_warmup,
         )
-    mps_sync()
+    device_sync()
     del warmup_inputs
     print("Warmup done.\n")
 

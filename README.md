@@ -100,6 +100,8 @@ conda activate gazeprune
 
 Or manually:
 
+### Ablations
+Run ablation studies using:
 ```bash
 conda create -n gazeprune python=3.11 -y
 pip install torch torchvision "transformers>=4.51.0" \

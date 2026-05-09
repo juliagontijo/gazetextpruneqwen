@@ -2,6 +2,8 @@
 llmgazepp/
 .venv/
 venv/
+*.csv
+*.zip
 
 # Data and artifacts
 data/
